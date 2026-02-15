@@ -1,0 +1,44 @@
+{
+  "name": "gra-w-statki",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "build:server": "tsc -p tsconfig.server.json && node -e \"const fs=require('node:fs'); const path=require('node:path'); const src=path.join('dist', 'server', 'server', 'matchmaking.js'); const dst=path.join('dist', 'server', 'matchmaking.js'); if (fs.existsSync(src)) fs.copyFileSync(src, dst);\"",
+    "build:client": "tsc -p tsconfig.client.json",
+    "build": "npm run build:server && npm run build:client",
+    "prestart": "npm run build",
+    "test": "npm run test:core",
+    "test:core": "npm run build && node --test --test-concurrency=1 tests/health.test.js tests/shared-logic.test.js tests/matchmaking.test.js",
+    "test:socketflow": "npm run build && node --test --test-concurrency=1 tests/socketflow.test.js",
+    "test:db-retention": "node --test --test-concurrency=1 tests/db-retention.test.js",
+    "test:all": "npm run test:core && npm run test:socketflow && npm run test:db-retention",
+    "test:socket-cors": "npm run build && node --test --test-concurrency=1 --test-name-pattern \"^socket\" tests/socketflow.test.js",
+    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
+    "db:init": "node scripts/db-init.js",
+    "db:retention": "node scripts/db-retention.js",
+    "security": "npm audit --audit-level=high",
+    "verify": "npm run lint && npm test && npm run security",
+    "start": "node dist/server/server/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0",
+    "pg": "^8.13.1",
+    "redis": "^4.7.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@typescript-eslint/eslint-plugin": "^8.24.0",
+    "@typescript-eslint/parser": "^8.24.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.2.0",
+    "@types/pg": "^8.11.11",
+    "eslint": "^9.20.1",
+    "globals": "^15.15.0",
+    "typescript": "^5.8.2"
+  }
+}

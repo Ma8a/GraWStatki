@@ -1,0 +1,71 @@
+name: DB Retention
+
+on:
+  schedule:
+    - cron: "47 2 * * *"
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Retention mode"
+        required: true
+        default: "dry-run"
+        type: choice
+        options:
+          - dry-run
+          - delete
+
+jobs:
+  retention-dry-run:
+    if: ${{ secrets.DATABASE_URL_RETENTION != '' && ((github.event_name == 'schedule' && github.event.schedule == '47 2 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'dry-run')) }}
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL_RETENTION }}
+      DB_RETENTION_DRY_RUN: "true"
+      MATCH_EVENTS_RETENTION_DAYS: "30"
+      SECURITY_EVENTS_RETENTION_DAYS: "30"
+      MATCHES_RETENTION_DAYS: "90"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run db:retention | tee retention-dry-run.log
+      - name: Publish retention dry-run summary
+        run: |
+          echo "## DB Retention (dry-run)" >> "$GITHUB_STEP_SUMMARY"
+          cat retention-dry-run.log >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-retention-dry-run-${{ github.run_id }}
+          path: retention-dry-run.log
+          if-no-files-found: error
+
+  retention-delete:
+    if: ${{ secrets.DATABASE_URL_RETENTION != '' && ((github.event_name == 'schedule' && github.event.schedule == '17 3 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'delete')) }}
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL_RETENTION }}
+      DB_RETENTION_DRY_RUN: "false"
+      MATCH_EVENTS_RETENTION_DAYS: "30"
+      SECURITY_EVENTS_RETENTION_DAYS: "30"
+      MATCHES_RETENTION_DAYS: "90"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run db:retention | tee retention-delete.log
+      - name: Publish retention delete summary
+        run: |
+          echo "## DB Retention (delete)" >> "$GITHUB_STEP_SUMMARY"
+          cat retention-delete.log >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-retention-delete-${{ github.run_id }}
+          path: retention-delete.log
+          if-no-files-found: error

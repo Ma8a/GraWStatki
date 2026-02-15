@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: battleship
+          POSTGRES_USER: battleship
+          POSTGRES_PASSWORD: battleship
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U battleship -d battleship"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://battleship:battleship@127.0.0.1:5432/battleship
+      DATABASE_REQUIRED: "1"
+      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run db:init
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - run: npm run security

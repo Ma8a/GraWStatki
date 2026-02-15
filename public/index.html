@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gra w Statki</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="header-top">
+          <div class="brand">
+            <span class="logo-mark" aria-hidden="true">⚓</span>
+            <h1 id="titleText">Gra w statki</h1>
+          </div>
+          <div class="lang-switch" role="group" aria-label="Language switcher">
+            <span id="labelLanguage">Język:</span>
+            <button id="langPlBtn" class="lang-flag" type="button" title="Polski" aria-label="Polski">🇵🇱</button>
+            <button id="langEnBtn" class="lang-flag" type="button" title="English" aria-label="English">🇬🇧</button>
+          </div>
+        </div>
+        <p id="subtitleText" class="subtitle">Tryb taktyczny: ręczne ustawianie i walka online</p>
+        <div class="status-line">
+          <span id="modeBadge" class="chip">PvA</span>
+          <span id="readinessBadge" class="chip readiness-badge readiness-wait">Gotowość: Ty NIE / Przeciwnik NIE</span>
+          <span id="queueTimer" class="queue-timer"></span>
+          <span class="status-pill">
+            <span id="labelShots">Strzały:</span>
+            <span id="labelYou">Ty</span> <strong id="shotsYour">0</strong> /
+            <span id="labelOpponentInline">Przeciwnik</span> <strong id="shotsOpponent">0</strong> /
+            <span id="labelTotal">Razem</span> <strong id="shotsTotal">0</strong>
+          </span>
+          <span class="status-pill"><span id="labelEnemyName">Przeciwnik:</span> <strong id="opponentName">AI</strong></span>
+        </div>
+      </header>
+
+      <section class="control-surface">
+        <div class="toolbar-group toolbar-group--primary">
+          <button id="btnStartLocal" type="button">Start PvA</button>
+          <button id="btnJoinQueue" type="button">Szukaj online</button>
+          <button id="btnPlayAgainOnline" type="button">Nowa gra online</button>
+          <button id="btnFire" type="button">Oddaj strzał</button>
+          <button id="btnCancel" type="button">Anuluj/wyjdź</button>
+        </div>
+
+        <div class="toolbar-group toolbar-group--placement">
+          <button id="btnRotate" type="button">Obróć ręczny (H/V)</button>
+          <span id="orientationBadge" class="orientation-badge">Orientacja: H</span>
+          <button id="btnAutoPlace" type="button">Losowe rozstawienie</button>
+          <button id="btnClearPlacement" type="button">Wyczyść do ręcznego</button>
+          <span id="placementHint" class="placement-hint">Ustawianie: PPM / scroll / R = obrót</span>
+        </div>
+
+        <div class="toolbar-group toolbar-group--secondary">
+          <label>
+            <span id="labelNickname">Nickname:</span>
+            <input id="nicknameInput" type="text" value="Gracz" maxlength="20" />
+          </label>
+          <label>
+            <span id="labelShot">Strzał (A1-J10):</span>
+            <input id="shotInput" type="text" maxlength="3" placeholder="A5" />
+          </label>
+        </div>
+      </section>
+
+      <section class="info">
+        <p id="remainingShips">Tryb: ręczny / losowy.</p>
+        <p id="status">Witaj w grze.</p>
+        <div class="board-legend">
+          <span id="legendShip">⚓ Twój statek</span>
+          <span id="legendHit">💥 Trafienie</span>
+          <span id="legendMiss">· Pudło</span>
+          <span id="legendSunk">🛳️ Zatopiony segment</span>
+        </div>
+      </section>
+
+      <section class="boards">
+        <article class="board-card">
+          <h2 id="myBoardTitle">Moja plansza</h2>
+          <div id="myBoard"></div>
+        </article>
+        <article class="board-card">
+          <h2 id="enemyBoardTitle">Plansza przeciwnika</h2>
+          <div id="enemyBoard"></div>
+        </article>
+      </section>
+    </div>
+
+    <div id="winnerFx" class="winner-fx" aria-hidden="true">
+      <div class="winner-fx__backdrop"></div>
+      <div id="winnerFxConfetti" class="winner-fx__confetti"></div>
+      <div class="winner-fx__scene">
+        <div class="winner-fx__cannon" aria-hidden="true"></div>
+        <div class="winner-fx__ball" aria-hidden="true"></div>
+        <div class="winner-fx__explosion" aria-hidden="true"></div>
+        <div class="winner-fx__center">
+          <div id="winnerFxTitle" class="winner-fx__title">WINNER</div>
+          <div id="winnerFxName" class="winner-fx__name">Player</div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="/assets/client/main.js"></script>
+  </body>
+</html>
