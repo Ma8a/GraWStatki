@@ -75,6 +75,54 @@
         </div>
       </section>
 
+      <section id="chatPanel" class="chat-panel" aria-label="Czat online">
+        <div class="chat-panel__header">
+          <h3 id="chatTitle" class="chat-panel__title">Czat online</h3>
+          <span id="chatUnread" class="chat-panel__unread"></span>
+        </div>
+        <p id="chatHint" class="chat-panel__hint">Czat działa tylko w meczu online PvP.</p>
+        <div id="chatList" class="chat-list" aria-live="polite"></div>
+        <div class="chat-panel__composer">
+          <input id="chatInput" type="text" maxlength="240" placeholder="Napisz wiadomość..." />
+          <button id="chatSendBtn" type="button">Wyślij</button>
+        </div>
+        <div class="chat-panel__actions">
+          <div class="chat-panel__emoji">
+            <button type="button" data-chat-emoji="💥">💥</button>
+            <button type="button" data-chat-emoji="🎯">🎯</button>
+            <button type="button" data-chat-emoji="😅">😅</button>
+            <button type="button" data-chat-emoji="😎">😎</button>
+            <button type="button" data-chat-emoji="🔥">🔥</button>
+            <button type="button" data-chat-emoji="🚢">🚢</button>
+            <button type="button" data-chat-emoji="👏">👏</button>
+            <button type="button" data-chat-emoji="🤝">🤝</button>
+          </div>
+          <button id="chatGifToggle" type="button">GIF reakcje</button>
+        </div>
+        <div id="chatGifBar" class="chat-gif-bar" hidden>
+          <button type="button" class="chat-gif" data-chat-gif="direct_hit">
+            <img src="/assets/chat-gifs/direct_hit.gif" alt="Direct hit" />
+            <span class="chat-gif__label">Celny strzał</span>
+          </button>
+          <button type="button" class="chat-gif" data-chat-gif="missed_shot">
+            <img src="/assets/chat-gifs/missed_shot.gif" alt="Missed shot" />
+            <span class="chat-gif__label">Pudło</span>
+          </button>
+          <button type="button" class="chat-gif" data-chat-gif="ship_sunk">
+            <img src="/assets/chat-gifs/ship_sunk.gif" alt="Ship sunk" />
+            <span class="chat-gif__label">Statek zatopiony</span>
+          </button>
+          <button type="button" class="chat-gif" data-chat-gif="nice_move">
+            <img src="/assets/chat-gifs/nice_move.gif" alt="Nice move" />
+            <span class="chat-gif__label">Dobry ruch</span>
+          </button>
+          <button type="button" class="chat-gif" data-chat-gif="gg">
+            <img src="/assets/chat-gifs/gg.gif" alt="GG" />
+            <span class="chat-gif__label">GG</span>
+          </button>
+        </div>
+      </section>
+
       <section class="boards">
         <article class="board-card">
           <h2 id="myBoardTitle">Moja plansza</h2>

@@ -6,3 +6,20 @@ export const REQUIRED_FLEET = {
     3: 2,
     4: 1,
 };
+export const CHAT_GIF_IDS = [
+    "direct_hit",
+    "missed_shot",
+    "ship_sunk",
+    "nice_move",
+    "gg",
+];
+export const CHAT_EMOJI = [
+    "💥",
+    "🎯",
+    "😅",
+    "😎",
+    "🔥",
+    "🚢",
+    "👏",
+    "🤝",
+];

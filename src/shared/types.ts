@@ -28,6 +28,8 @@ export interface BoardModel {
 
 export type ShotOutcome = "miss" | "hit" | "sink" | "invalid" | "already_shot";
 
+export type ChatKind = "text" | "emoji" | "gif" | "system";
+
 export interface ShotResult {
   outcome: ShotOutcome;
   shipId?: string;
@@ -67,6 +69,10 @@ export type GameErrorCode =
   | "reconnect_token_expired"
   | "invalid_payload"
   | "soft_ban"
+  | "chat_invalid_payload"
+  | "chat_rate_limited"
+  | "chat_not_allowed"
+  | "chat_room_mismatch"
   | "general";
 
 export interface GameErrorPayload {
@@ -146,6 +152,37 @@ export interface GameCancelledPayload {
   message: string;
 }
 
+export interface ChatMessage {
+  id: string;
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  kind: ChatKind;
+  text?: string;
+  emoji?: string;
+  gifId?: string;
+  createdAt: number;
+}
+
+export interface ChatSendPayload {
+  roomId?: string;
+  kind: "text" | "emoji" | "gif";
+  text?: string;
+  emoji?: string;
+  gifId?: string;
+}
+
+export interface ChatHistoryPayload {
+  roomId: string;
+  messages: ChatMessage[];
+  replayed: boolean;
+}
+
+export interface ChatMessagePayload {
+  roomId: string;
+  message: ChatMessage;
+}
+
 export interface SearchJoinPayload {
   nickname?: string;
   reconnectToken?: string;
@@ -168,3 +205,22 @@ export interface GameShotPayload {
 export interface GameCancelPayload {
   roomId?: string;
 }
+
+export const CHAT_GIF_IDS = [
+  "direct_hit",
+  "missed_shot",
+  "ship_sunk",
+  "nice_move",
+  "gg",
+] as const;
+
+export const CHAT_EMOJI = [
+  "💥",
+  "🎯",
+  "😅",
+  "😎",
+  "🔥",
+  "🚢",
+  "👏",
+  "🤝",
+] as const;

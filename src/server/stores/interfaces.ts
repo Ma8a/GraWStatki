@@ -1,4 +1,4 @@
-import { SerializedBoard } from "../../shared";
+import { ChatMessage, SerializedBoard } from "../../shared";
 
 export type RoomPhase = "setup" | "playing" | "over";
 export type RoomStatus = "setup" | "active" | "ended" | "cancelled";
@@ -22,6 +22,9 @@ export interface RoomSnapshot {
   disconnectedAtByToken: Record<string, number>;
   readyPlayers: string[];
   shotCounters: Record<string, number>;
+  chatMessages?: ChatMessage[];
+  chatSeq?: number;
+  postGameExpiresAt?: number;
 }
 
 export interface RoomStore {

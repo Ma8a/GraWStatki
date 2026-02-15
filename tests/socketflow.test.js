@@ -6468,3 +6468,253 @@ test("sunkCells survive graceful restart and reconnect for both perspectives", a
     await serverB.close();
   }
 });
+
+test("chat:send text in online PvP is broadcast to both players", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port);
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const text = "Target locked.";
+
+    const chatA = waitForEventFiltered(
+      socketA,
+      "chat:message",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.message?.kind === "text" &&
+        payload?.message?.text === text,
+      4_000,
+    );
+    const chatB = waitForEventFiltered(
+      socketB,
+      "chat:message",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.message?.kind === "text" &&
+        payload?.message?.text === text,
+      4_000,
+    );
+
+    socketA.emit("chat:send", { roomId, kind: "text", text });
+    const [payloadA, payloadB] = await Promise.all([chatA, chatB]);
+    assert.equal(payloadA.message.senderId, socketA.id);
+    assert.equal(payloadB.message.senderId, socketA.id);
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send with invalid gif id is rejected with chat_invalid_payload", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port);
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const chatError = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (payload) => payload?.code === "chat_invalid_payload",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "gif", gifId: "pwned_payload" });
+    const payload = await chatError;
+    assert.equal(payload.code, "chat_invalid_payload");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send is rejected in PvA bot room", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, { MATCH_TIMEOUT_MS: "300" });
+  const socketA = createClient(port, { reconnection: false });
+
+  try {
+    const matched = waitForEventFiltered(
+      socketA,
+      "queue:matched",
+      (payload) => payload?.vsBot === true,
+      4_000,
+    );
+    socketA.emit("search:join", { nickname: "Solo" });
+    const payload = await matched;
+    const roomId = payload.roomId;
+    const error = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (eventPayload) => eventPayload?.code === "chat_not_allowed",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "hello bot?" });
+    const chatError = await error;
+    assert.equal(chatError.code, "chat_not_allowed");
+  } finally {
+    socketA.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send is rate limited under burst", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    RATE_LIMIT_CHAT_PER_WINDOW: "2",
+    RATE_LIMIT_CHAT_WINDOW_MS: "2_000",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+
+    const limited = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (payload) => payload?.code === "chat_rate_limited",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "m1" });
+    socketA.emit("chat:send", { roomId, kind: "text", text: "m2" });
+    socketA.emit("chat:send", { roomId, kind: "text", text: "m3" });
+    const payload = await limited;
+    assert.equal(payload.code, "chat_rate_limited");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat history is replayed after reconnect", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    ROOM_RECONNECT_GRACE_MS: "8_000",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+  let recoveredB = null;
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const reconnectTokenB = setup.bMatch.reconnectToken;
+    assert.equal(typeof reconnectTokenB, "string");
+    assert.equal(reconnectTokenB.length > 0, true);
+
+    const firstMsg = "Keep formation.";
+    const secondMsg = "Roger that.";
+    const chatSeenA = waitForEvents(
+      socketA,
+      "chat:message",
+      (payload) => payload?.roomId === roomId,
+      2,
+      4_000,
+    );
+    const chatSeenB = waitForEvents(
+      socketB,
+      "chat:message",
+      (payload) => payload?.roomId === roomId,
+      2,
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: firstMsg });
+    socketB.emit("chat:send", { roomId, kind: "text", text: secondMsg });
+    await Promise.all([chatSeenA, chatSeenB]);
+
+    socketB.disconnect();
+    recoveredB = createClient(port, { reconnection: false });
+    const restoredState = waitForEventFiltered(
+      recoveredB,
+      "game:state",
+      (payload) => payload?.roomId === roomId && payload?.phase === "playing",
+      6_000,
+    );
+    const history = waitForEventFiltered(
+      recoveredB,
+      "chat:history",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.replayed === true &&
+        Array.isArray(payload?.messages) &&
+        payload.messages.some((message) => message?.text === firstMsg) &&
+        payload.messages.some((message) => message?.text === secondMsg),
+      6_000,
+    );
+    recoveredB.emit("search:join", { nickname: "Beta-R", reconnectToken: reconnectTokenB });
+    await restoredState;
+    const replay = await history;
+    assert.equal(replay.replayed, true);
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    if (recoveredB) recoveredB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat remains available in over phase and closes after post-game ttl", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    POST_GAME_CHAT_TTL_MS: "900",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+
+    const overA = waitForEventFiltered(
+      socketA,
+      "game:over",
+      (payload) => payload?.roomId === roomId,
+      4_000,
+    );
+    const overB = waitForEventFiltered(
+      socketB,
+      "game:over",
+      (payload) => payload?.roomId === roomId,
+      4_000,
+    );
+    socketA.emit("game:cancel", { roomId });
+    await Promise.all([overA, overB]);
+
+    const overChat = waitForEventFiltered(
+      socketB,
+      "chat:message",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.message?.kind === "text" &&
+        payload?.message?.text === "GG",
+      4_000,
+    );
+    socketB.emit("chat:send", { roomId, kind: "text", text: "GG" });
+    await overChat;
+
+    await sleep(1_500);
+    const blocked = waitForEventFiltered(
+      socketB,
+      "game:error",
+      (payload) => payload?.code === "chat_not_allowed",
+      4_000,
+    );
+    socketB.emit("chat:send", { roomId, kind: "text", text: "Still there?" });
+    const payload = await blocked;
+    assert.equal(payload.code, "chat_not_allowed");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});

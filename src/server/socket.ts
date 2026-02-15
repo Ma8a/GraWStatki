@@ -1,6 +1,9 @@
 import { Server, Socket } from "socket.io";
 import {
   BOARD_SIZE,
+  CHAT_EMOJI,
+  CHAT_GIF_IDS,
+  ChatSendPayload,
   Coord,
   GameCancelPayload,
   GamePlaceShipsPayload,
@@ -19,6 +22,7 @@ export interface GameSocketHandlers {
   onGamePlaceShips: (socket: Socket, payload: GamePlaceShipsPayload) => void | Promise<void>;
   onGameShot: (socket: Socket, payload: GameShotPayload) => void | Promise<void>;
   onGameCancel: (socket: Socket, payload: GameCancelPayload) => void | Promise<void>;
+  onChatSend: (socket: Socket, payload: ChatSendPayload) => void | Promise<void>;
   onDisconnect: (socket: Socket) => void | Promise<void>;
   onInvalidInput?: (socket: Socket, eventName: string) => void;
 }
@@ -31,6 +35,7 @@ const MAX_NICKNAME_LENGTH = 40;
 const MAX_ROOM_ID_LENGTH = 64;
 const MAX_SHOT_LIST_ENTRIES = BOARD_SIZE * BOARD_SIZE;
 const MAX_SHOT_KEY_LENGTH = 8;
+const MAX_CHAT_TEXT_LENGTH = 240;
 
 const normalizeString = (value: unknown, maxLength: number, fallback = ""): string => {
   if (typeof value !== "string") return fallback;
@@ -76,6 +81,8 @@ const normalizeShots = (value: unknown): string[] => {
 
 const isShipType = (value: number): value is ShipType => value === 1 || value === 2 || value === 3 || value === 4;
 const isOrientation = (value: unknown): value is Orientation => value === "H" || value === "V";
+const isChatKind = (value: unknown): value is "text" | "emoji" | "gif" =>
+  value === "text" || value === "emoji" || value === "gif";
 
 const normalizeBoardCandidate = (payload: unknown): SerializedBoard | null => {
   if (!isRecord(payload)) return null;
@@ -201,6 +208,39 @@ const parseGameCancelPayload = (payload: unknown): GameCancelPayload | null => {
   };
 };
 
+const parseChatSendPayload = (payload: unknown): ChatSendPayload | null => {
+  if (!isRecord(payload)) return null;
+  if (!isChatKind(payload.kind)) return null;
+  const kind = payload.kind;
+  const roomId = normalizeRoomId(payload.roomId);
+  if (kind === "text") {
+    if (typeof payload.text !== "string") return null;
+    const text = payload.text.trim();
+    if (text.length === 0 || text.length > MAX_CHAT_TEXT_LENGTH) return null;
+    return {
+      roomId,
+      kind,
+      text,
+    };
+  }
+  if (kind === "emoji") {
+    if (typeof payload.emoji !== "string") return null;
+    if (!CHAT_EMOJI.includes(payload.emoji as (typeof CHAT_EMOJI)[number])) return null;
+    return {
+      roomId,
+      kind,
+      emoji: payload.emoji,
+    };
+  }
+  if (typeof payload.gifId !== "string") return null;
+  if (!CHAT_GIF_IDS.includes(payload.gifId as (typeof CHAT_GIF_IDS)[number])) return null;
+  return {
+    roomId,
+    kind,
+    gifId: payload.gifId,
+  };
+};
+
 type PayloadParser<T> = (payload: unknown) => T | null;
 
 const safeHandle = <T>(
@@ -211,12 +251,13 @@ const safeHandle = <T>(
   handler: (payload: T) => void | Promise<void>,
   payload: unknown,
   invalidMessage?: string,
+  invalidCode = "invalid_payload",
 ): Promise<void> => {
   const parsed = parser(payload === undefined ? {} : payload);
   if (parsed === null) {
     handlers.onInvalidInput?.(socket, eventName);
     socket.emit("game:error", {
-      code: "invalid_payload",
+      code: invalidCode,
       message: invalidMessage ?? "Nieprawidłowe dane wejściowe.",
     });
     return Promise.resolve();
@@ -289,6 +330,19 @@ export const registerSocketHandlers = (io: Server, handlers: GameSocketHandlers)
         (body) => handlers.onGameCancel(socket, body),
         payload,
         "Nieprawidłowe dane anulowania gry.",
+      );
+    });
+
+    socket.on("chat:send", (payload) => {
+      void safeHandle(
+        socket,
+        "chat:send",
+        handlers,
+        parseChatSendPayload,
+        (body) => handlers.onChatSend(socket, body),
+        payload,
+        "Nieprawidłowe dane czatu.",
+        "chat_invalid_payload",
       );
     });
 

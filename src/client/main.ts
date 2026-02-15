@@ -23,6 +23,12 @@ import {
   GameCancelledPayload,
   GameOverPayload,
   GamePlaceShipsPayload,
+  ChatHistoryPayload,
+  ChatMessage,
+  ChatMessagePayload,
+  ChatSendPayload,
+  CHAT_EMOJI,
+  CHAT_GIF_IDS,
   SearchJoinPayload,
 } from "../shared/index.js";
 
@@ -45,6 +51,12 @@ type PlacementPreview = {
   keys: Set<string>;
   valid: boolean;
 };
+
+interface ChatState {
+  enabled: boolean;
+  messages: ChatMessage[];
+  unread: number;
+}
 
 interface LocalState {
   phase: Phase;
@@ -241,6 +253,17 @@ const winnerFxEl = $("#winnerFx") as HTMLDivElement;
 const winnerFxTitleEl = $("#winnerFxTitle") as HTMLDivElement;
 const winnerFxNameEl = $("#winnerFxName") as HTMLDivElement;
 const winnerFxConfettiEl = $("#winnerFxConfetti") as HTMLDivElement;
+const chatTitleEl = $("#chatTitle") as HTMLHeadingElement;
+const chatPanelEl = $("#chatPanel") as HTMLDivElement;
+const chatListEl = $("#chatList") as HTMLDivElement;
+const chatInputEl = $("#chatInput") as HTMLInputElement;
+const chatSendBtnEl = $("#chatSendBtn") as HTMLButtonElement;
+const chatHintEl = $("#chatHint") as HTMLParagraphElement;
+const chatGifToggleEl = $("#chatGifToggle") as HTMLButtonElement;
+const chatGifBarEl = $("#chatGifBar") as HTMLDivElement;
+const chatUnreadEl = $("#chatUnread") as HTMLSpanElement;
+const chatEmojiButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chat-emoji]"));
+const chatGifButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chat-gif]"));
 
 const btnRotate = $("#btnRotate") as HTMLButtonElement;
 const btnAutoPlace = $("#btnAutoPlace") as HTMLButtonElement;
@@ -262,6 +285,7 @@ let inQueue = false;
 let roomId: string | null = null;
 let onlineReady = false;
 let onlineOpponentReady = false;
+let onlineVsBot = false;
 let yourId = "";
 let yourTurnOnline = false;
 let opponentName = "Bot";
@@ -276,12 +300,18 @@ let previousCanShoot = false;
 let autoReconnectQueued = false;
 let reconnectToken: string | null = null;
 let hoverCoord: Coord | null = null;
+let chatGifOpen = false;
 const RECONNECT_TOKEN_KEY = "battleship_reconnect_token";
 const LANGUAGE_KEY = "battleship_language";
 const RECONNECT_GRACE_MS_FALLBACK = 3_000;
 let language: Lang = "pl";
 let statusRaw = "";
 let winnerFxTimer: ReturnType<typeof setTimeout> | null = null;
+let chatState: ChatState = {
+  enabled: false,
+  messages: [],
+  unread: 0,
+};
 const DEFAULT_NICK_BY_LANG: Record<Lang, string> = {
   pl: "Gracz",
   en: "Player",
@@ -289,6 +319,13 @@ const DEFAULT_NICK_BY_LANG: Record<Lang, string> = {
 const DEFAULT_OPPONENT_NAME: Record<Lang, string> = {
   pl: "Przeciwnik",
   en: "Opponent",
+};
+const CHAT_GIF_LABELS: Record<(typeof CHAT_GIF_IDS)[number], Record<Lang, string>> = {
+  direct_hit: { pl: "Celny strzał", en: "Direct hit" },
+  missed_shot: { pl: "Pudło", en: "Missed shot" },
+  ship_sunk: { pl: "Statek zatopiony", en: "Ship sunk" },
+  nice_move: { pl: "Dobry ruch", en: "Nice move" },
+  gg: { pl: "GG", en: "GG" },
 };
 
 const resetShotInputState = (clearValue = false) => {
@@ -356,6 +393,17 @@ const I18N: Record<Lang, Record<string, string>> = {
     gameActiveBadge: "Gra aktywna",
     gameOverBadge: "Gra zakończona",
     winnerTitle: "ZWYCIEZCA",
+    chatTitle: "Czat online",
+    chatPlaceholder: "Napisz wiadomość...",
+    chatSend: "Wyślij",
+    chatHintDisabled: "Czat działa tylko w meczu online PvP.",
+    chatHintEnabled: "Czat aktywny: setup / gra / koniec gry (60s).",
+    chatEmoji: "Emoji",
+    chatGifs: "GIF reakcje",
+    chatYou: "Ty",
+    chatOpponent: "Przeciwnik",
+    chatSystem: "System",
+    chatUnread: "Nowe: {count}",
   },
   en: {
     title: "BATTLESHIP",
@@ -396,6 +444,17 @@ const I18N: Record<Lang, Record<string, string>> = {
     gameActiveBadge: "Game active",
     gameOverBadge: "Game finished",
     winnerTitle: "WINNER",
+    chatTitle: "Online Chat",
+    chatPlaceholder: "Type a message...",
+    chatSend: "Send",
+    chatHintDisabled: "Chat is available only in online PvP match.",
+    chatHintEnabled: "Chat active: setup / playing / game over (60s).",
+    chatEmoji: "Emoji",
+    chatGifs: "GIF reactions",
+    chatYou: "You",
+    chatOpponent: "Opponent",
+    chatSystem: "System",
+    chatUnread: "Unread: {count}",
   },
 };
 
@@ -727,6 +786,25 @@ const applyStaticTranslations = () => {
   btnPlayAgainOnline.textContent = t("btnPlayAgainOnline");
   btnCancel.textContent = t("btnCancel");
   btnFire.textContent = t("btnFire");
+  chatTitleEl.textContent = t("chatTitle");
+  chatPanelEl.setAttribute("aria-label", t("chatTitle"));
+  chatInputEl.placeholder = t("chatPlaceholder");
+  chatSendBtnEl.textContent = t("chatSend");
+  chatGifToggleEl.textContent = t("chatGifs");
+  chatEmojiButtons.forEach((button) => {
+    button.title = `${t("chatEmoji")} ${button.dataset.chatEmoji ?? ""}`.trim();
+    button.setAttribute("aria-label", button.title);
+  });
+  chatGifButtons.forEach((button) => {
+    const gifId = button.dataset.chatGif as (typeof CHAT_GIF_IDS)[number] | undefined;
+    if (!gifId || !(gifId in CHAT_GIF_LABELS)) return;
+    button.title = CHAT_GIF_LABELS[gifId][language];
+    button.setAttribute("aria-label", button.title);
+    const label = button.querySelector(".chat-gif__label");
+    if (label) {
+      label.textContent = CHAT_GIF_LABELS[gifId][language];
+    }
+  });
   langPlBtn.classList.toggle("active", language === "pl");
   langEnBtn.classList.toggle("active", language === "en");
 };
@@ -763,6 +841,7 @@ const resetToLocalMode = (message: string) => {
   autoReconnectQueued = false;
   onlineReady = false;
   onlineOpponentReady = false;
+  onlineVsBot = false;
   yourTurnOnline = false;
   roomId = null;
   clearReconnectCountdown();
@@ -770,6 +849,7 @@ const resetToLocalMode = (message: string) => {
   opponentName = "AI";
   awaitingShot = false;
   stopQueueTimer();
+  resetChatState();
   clearWinnerFxTimer();
   winnerFxEl.classList.remove("active");
   winnerFxConfettiEl.innerHTML = "";
@@ -794,6 +874,111 @@ const resetToLocalMode = (message: string) => {
   };
   setStatus(message);
   render();
+};
+
+const isChatEnabled = (): boolean =>
+  online &&
+  !inQueue &&
+  !onlineVsBot &&
+  Boolean(roomId) &&
+  (state.phase === "setup" || state.phase === "playing" || state.phase === "over");
+
+const resetChatState = () => {
+  chatState = {
+    enabled: false,
+    messages: [],
+    unread: 0,
+  };
+  chatGifOpen = false;
+};
+
+const chatMessageAuthor = (message: ChatMessage): string => {
+  if (message.kind === "system") return t("chatSystem");
+  if (message.senderId === yourId) return t("chatYou");
+  if (message.senderName && message.senderName.trim().length > 0) return message.senderName;
+  return t("chatOpponent");
+};
+
+const chatMessageBody = (message: ChatMessage): string => {
+  if (message.kind === "text") return message.text ?? "";
+  if (message.kind === "emoji") return message.emoji ?? "";
+  if (message.kind === "gif") {
+    const gifId = message.gifId as (typeof CHAT_GIF_IDS)[number] | undefined;
+    if (gifId && CHAT_GIF_LABELS[gifId]) return CHAT_GIF_LABELS[gifId][language];
+    return "GIF";
+  }
+  return message.text ?? "";
+};
+
+const chatGifSrc = (gifId: string): string => `/assets/chat-gifs/${gifId}.gif`;
+
+const renderChat = () => {
+  chatState.enabled = isChatEnabled();
+  chatPanelEl.classList.toggle("chat-panel--disabled", !chatState.enabled);
+  chatInputEl.disabled = !chatState.enabled;
+  chatSendBtnEl.disabled = !chatState.enabled;
+  chatGifToggleEl.disabled = !chatState.enabled;
+  chatGifBarEl.hidden = !chatState.enabled || !chatGifOpen;
+  chatHintEl.textContent = chatState.enabled ? t("chatHintEnabled") : t("chatHintDisabled");
+  chatUnreadEl.textContent = chatState.unread > 0 ? t("chatUnread", { count: chatState.unread }) : "";
+
+  chatListEl.innerHTML = "";
+  for (const message of chatState.messages) {
+    const item = document.createElement("div");
+    item.className = "chat-message";
+    if (message.kind === "system") item.classList.add("chat-message--system");
+    else item.classList.add(message.senderId === yourId ? "chat-message--you" : "chat-message--opponent");
+
+    const head = document.createElement("div");
+    head.className = "chat-message__head";
+    const author = document.createElement("span");
+    author.className = "chat-message__author";
+    author.textContent = chatMessageAuthor(message);
+    const time = document.createElement("time");
+    time.className = "chat-message__time";
+    time.textContent = new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    head.append(author, time);
+
+    const body = document.createElement("div");
+    body.className = "chat-message__body";
+    if (message.kind === "gif" && message.gifId) {
+      const img = document.createElement("img");
+      img.className = "chat-message__gif";
+      img.src = chatGifSrc(message.gifId);
+      img.alt = chatMessageBody(message);
+      const caption = document.createElement("div");
+      caption.className = "chat-message__gif-label";
+      caption.textContent = chatMessageBody(message);
+      body.appendChild(img);
+      body.appendChild(caption);
+    } else {
+      body.textContent = chatMessageBody(message);
+    }
+    item.append(head, body);
+    chatListEl.appendChild(item);
+  }
+  chatListEl.scrollTop = chatListEl.scrollHeight;
+};
+
+const replaceChatHistory = (messages: ChatMessage[]) => {
+  chatState.messages = messages.slice(-80);
+  chatState.unread = 0;
+};
+
+const appendChatMessage = (message: ChatMessage) => {
+  chatState.messages.push(message);
+  if (chatState.messages.length > 80) {
+    chatState.messages = chatState.messages.slice(-80);
+  }
+  if (document.hidden && message.senderId !== yourId) {
+    chatState.unread += 1;
+  }
+};
+
+const emitChatSend = (payload: ChatSendPayload) => {
+  if (!socket || !chatState.enabled || !roomId) return;
+  const outgoing: ChatSendPayload = { ...payload, roomId };
+  socket.emit("chat:send", outgoing);
 };
 
 const drawBoard = (
@@ -1023,6 +1208,7 @@ const render = () => {
   opponentNameEl.textContent = online ? opponentName : "AI";
   updateRemaining();
   updateControls();
+  renderChat();
   const nowCanShoot = canShootEnemy();
   if (nowCanShoot && !previousCanShoot) {
     shotInput.focus();
@@ -1032,6 +1218,7 @@ const render = () => {
 };
 
 const resetOnlineQueueSetupState = () => {
+  resetChatState();
   state = {
     ...state,
     phase: "setup",
@@ -1313,6 +1500,8 @@ type PublicQueueQueued = QueueQueuedPayload;
 type PublicShotResult = GameShotResultPayload;
 type PublicError = GameErrorPayload;
 type PublicCancelled = GameCancelledPayload;
+type PublicChatHistory = ChatHistoryPayload;
+type PublicChatMessage = ChatMessagePayload;
 type PlaceShipsPayload = GamePlaceShipsPayload;
 
 const stopQueueTimer = () => {
@@ -1396,6 +1585,7 @@ const startQueueTimer = (payload: PublicQueueQueued) => {
 const applyOnlineState = (payload: PublicState) => {
   stopQueueTimer();
   online = true;
+  onlineVsBot = payload.vsBot;
   roomId = payload.roomId;
   yourId = payload.yourId;
   yourTurnOnline = payload.yourTurn;
@@ -1493,6 +1683,7 @@ const joinQueue = () => {
   socket.emit("search:join", payload);
   onlineReady = false;
   onlineOpponentReady = false;
+  onlineVsBot = false;
   setStatus("Dołączono do kolejki...");
   render();
 };
@@ -1578,6 +1769,50 @@ shotInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
   fireFromInput();
+});
+
+chatSendBtnEl.addEventListener("click", () => {
+  const text = chatInputEl.value.trim();
+  if (!text) return;
+  emitChatSend({ kind: "text", text });
+  chatInputEl.value = "";
+});
+
+chatInputEl.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  const text = chatInputEl.value.trim();
+  if (!text) return;
+  emitChatSend({ kind: "text", text });
+  chatInputEl.value = "";
+});
+
+chatGifToggleEl.addEventListener("click", () => {
+  chatGifOpen = !chatGifOpen;
+  render();
+});
+
+chatEmojiButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const emoji = button.dataset.chatEmoji;
+    if (!emoji || !CHAT_EMOJI.includes(emoji as (typeof CHAT_EMOJI)[number])) return;
+    emitChatSend({ kind: "emoji", emoji });
+  });
+});
+
+chatGifButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const gifId = button.dataset.chatGif;
+    if (!gifId || !CHAT_GIF_IDS.includes(gifId as (typeof CHAT_GIF_IDS)[number])) return;
+    emitChatSend({ kind: "gif", gifId });
+  });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    chatState.unread = 0;
+    render();
+  }
 });
 
 boardOwnEl.addEventListener("mouseleave", () => {
@@ -1693,6 +1928,7 @@ if (socket) {
     clearReconnectCountdown();
     stopQueueTimer();
     roomId = payload.roomId;
+    onlineVsBot = payload.vsBot;
     if (payload.reconnectToken) {
       storeReconnectToken(payload.reconnectToken);
     }
@@ -1724,6 +1960,18 @@ if (socket) {
     }
     clearReconnectCountdown();
     applyOnlineState(payload);
+  });
+
+  socket.on("chat:history", (payload: PublicChatHistory) => {
+    if (payload.roomId !== roomId) return;
+    replaceChatHistory(Array.isArray(payload.messages) ? payload.messages : []);
+    render();
+  });
+
+  socket.on("chat:message", (payload: PublicChatMessage) => {
+    if (payload.roomId !== roomId) return;
+    appendChatMessage(payload.message);
+    render();
   });
 
   socket.on("game:turn", (payload: PublicTurn) => {
@@ -1799,6 +2047,15 @@ if (socket) {
 
   socket.on("game:error", (payload: PublicError) => {
     if (!isCurrentRoomEvent(payload as { roomId?: string | null })) {
+      return;
+    }
+    if (
+      payload.code === "chat_invalid_payload" ||
+      payload.code === "chat_rate_limited" ||
+      payload.code === "chat_not_allowed" ||
+      payload.code === "chat_room_mismatch"
+    ) {
+      chatHintEl.textContent = payload?.message ?? t("chatHintDisabled");
       return;
     }
     if (payload.code === "reconnect_grace") {
@@ -1948,6 +2205,7 @@ const submitPlacementOnline = () => {
 const init = () => {
   stopQueueTimer();
   awaitingShot = false;
+  resetChatState();
   resetShotInputState(true);
   state = {
     phase: "setup",

@@ -12,6 +12,10 @@ import {
   BoardModel,
   Coord,
   BOARD_SIZE,
+  ChatHistoryPayload,
+  ChatMessage,
+  ChatMessagePayload,
+  ChatSendPayload,
   Orientation,
   ShipType,
   createEmptyBoard,
@@ -162,10 +166,15 @@ const RATE_LIMITS = {
   GAME_CANCEL_PER_WINDOW: parseTimeoutMs(process.env.RATE_LIMIT_GAME_CANCEL_PER_WINDOW, 8),
   SEARCH_CANCEL_PER_WINDOW: parseTimeoutMs(process.env.RATE_LIMIT_SEARCH_CANCEL_PER_WINDOW, 8),
   PLACE_SHIPS_PER_WINDOW: parseTimeoutMs(process.env.RATE_LIMIT_PLACE_SHIPS_PER_WINDOW, 20),
+  CHAT_PER_WINDOW: parseTimeoutMs(process.env.RATE_LIMIT_CHAT_PER_WINDOW, 8),
   SHOT_WINDOW_MS: parseTimeoutMs(process.env.RATE_LIMIT_SHOT_WINDOW_MS, 1_000),
   JOIN_WINDOW_MS: parseTimeoutMs(process.env.RATE_LIMIT_JOIN_WINDOW_MS, 1_500),
   PLACE_SHIPS_WINDOW_MS: parseTimeoutMs(process.env.RATE_LIMIT_PLACE_SHIPS_WINDOW_MS, 1_500),
+  CHAT_WINDOW_MS: parseTimeoutMs(process.env.RATE_LIMIT_CHAT_WINDOW_MS, 4_000),
 };
+const CHAT_HISTORY_MAX = parseTimeoutMs(process.env.CHAT_HISTORY_MAX, 80);
+const CHAT_REPLAY_MAX = parseTimeoutMs(process.env.CHAT_REPLAY_MAX, 50);
+const POST_GAME_CHAT_TTL_MS = parseTimeoutMs(process.env.POST_GAME_CHAT_TTL_MS, 60_000);
 const INVALID_INPUT_LIMIT = parseTimeoutMs(process.env.INVALID_INPUT_LIMIT_PER_WINDOW, 12);
 const INVALID_INPUT_WINDOW_MS = parseTimeoutMs(process.env.INVALID_INPUT_WINDOW_MS, 10_000);
 const INVALID_INPUT_BAN_MS = parseTimeoutMs(process.env.INVALID_INPUT_BAN_MS, 30_000);
@@ -361,6 +370,9 @@ const toRoomSnapshot = (room: GameRoom): RoomSnapshot => ({
   disconnectedAtByToken: room.disconnectedAtByToken,
   readyPlayers: [...room.readyPlayers],
   shotCounters: room.shotCounters,
+  chatMessages: [...room.chatMessages],
+  chatSeq: room.chatSeq,
+  postGameExpiresAt: room.postGameExpiresAt,
 });
 
 const persistRoomSnapshot = (room: GameRoom): void => {
@@ -488,6 +500,12 @@ const restoreRoomFromSnapshot = (snapshot: RoomSnapshot): GameRoom => {
     disconnectedAtByToken: { ...snapshot.disconnectedAtByToken },
     readyPlayers: new Set(snapshot.readyPlayers),
     aiState: snapshot.vsBot ? createAiState() : undefined,
+    chatMessages: Array.isArray(snapshot.chatMessages) ? [...snapshot.chatMessages] : [],
+    chatSeq: typeof snapshot.chatSeq === "number" && Number.isFinite(snapshot.chatSeq) ? snapshot.chatSeq : 0,
+    postGameExpiresAt:
+      typeof snapshot.postGameExpiresAt === "number" && Number.isFinite(snapshot.postGameExpiresAt)
+        ? snapshot.postGameExpiresAt
+        : undefined,
   };
   return room;
 };
@@ -586,6 +604,9 @@ interface GameRoom {
   disconnectedAtByToken: Record<string, number>;
   aiState?: ReturnType<typeof createAiState>;
   readyPlayers: Set<PlayerId>;
+  chatMessages: ChatMessage[];
+  chatSeq: number;
+  postGameExpiresAt?: number;
 }
 
 const rooms = new Map<string, GameRoom>();
@@ -1018,6 +1039,9 @@ const createRoom = (
     disconnectedAtByToken: {},
     readyPlayers: new Set<PlayerId>(vsBot && botId ? [botId] : []),
     aiState: vsBot ? createAiState() : undefined,
+    chatMessages: [],
+    chatSeq: 0,
+    postGameExpiresAt: undefined,
   };
 
   if (vsBot && botId) {
@@ -1191,6 +1215,16 @@ const emitGameState = (room: GameRoom) => {
   persistRoomSnapshot(room);
 };
 
+const emitChatHistoryToPlayer = (room: GameRoom, playerId: PlayerId, replayed: boolean): void => {
+  if (room.vsBot) return;
+  const payload: ChatHistoryPayload = {
+    roomId: room.roomId,
+    messages: room.chatMessages.slice(-CHAT_REPLAY_MAX),
+    replayed,
+  };
+  io.to(playerId).emit("chat:history", payload);
+};
+
 const resolveOpponentForDisconnect = (
   room: GameRoom,
   playerId: PlayerId,
@@ -1312,9 +1346,11 @@ const endGame = (
     shotCounters: room.shotCounters,
     finishedAt: Date.now(),
   });
+  room.postGameExpiresAt = Date.now() + POST_GAME_CHAT_TTL_MS;
+  room.lastActionTs = Date.now();
   emitGameState(room);
   emitGameOver(room, winner, reason, message);
-  removeRoom(room);
+  persistRoomSnapshot(room);
 };
 
 const processQueueTimeoutEntry = (entry: QueueEntry): void => {
@@ -1398,6 +1434,8 @@ const tryMatchmaking = async () => {
     youReady: false,
     opponentReady: false,
   });
+  emitChatHistoryToPlayer(room, first.playerId, false);
+  emitChatHistoryToPlayer(room, second.playerId, false);
   recordMatchEvent(room.roomId, "queue_matched", {
     roomId: room.roomId,
     players: [first.playerId, second.playerId],
@@ -1486,11 +1524,30 @@ const onSearchJoin = async (socket: Socket, payload: SearchJoinPayload) => {
     return;
   }
   let reconnectMessage: string | undefined;
-  if (getRoomForPlayer(socket.id)) {
-    socket.emit("game:error", { message: "Jesteś już w grze. Wyjdź do menu przed dołączeniem." });
-    return;
+  const existingRoom = getRoomForPlayer(socket.id);
+  if (existingRoom) {
+    if (existingRoom.over || existingRoom.phase === "over") {
+      removeRoom(existingRoom);
+    } else {
+      socket.emit("game:error", { message: "Jesteś już w grze. Wyjdź do menu przed dołączeniem." });
+      return;
+    }
   }
   const roomFromReconnect = normalizedToken ? await getRoomByReconnectToken(normalizedToken) : null;
+  if (roomFromReconnect && roomFromReconnect.over) {
+    const currentPlayerId = roomFromReconnect.tokenToPlayerId[normalizedToken];
+    unregisterRoomToken(normalizedToken);
+    deleteTokenRoomMap(normalizedToken);
+    deleteParkedQueueEntry(normalizedToken);
+    deleteQueueEntry(socket.id, normalizedToken);
+    delete roomFromReconnect.disconnectedAtByToken[normalizedToken];
+    delete roomFromReconnect.tokenToPlayerId[normalizedToken];
+    if (currentPlayerId) {
+      delete roomFromReconnect.reconnectTokens[currentPlayerId];
+    }
+    reconnectMessage = "Token reconnecta stracił ważność. Tworzę nową kolejkę.";
+    persistRoomSnapshot(roomFromReconnect);
+  }
   if (roomFromReconnect && !roomFromReconnect.over) {
     const currentPlayerId = roomFromReconnect.tokenToPlayerId[normalizedToken];
     if (currentPlayerId) {
@@ -1540,6 +1597,7 @@ const onSearchJoin = async (socket: Socket, payload: SearchJoinPayload) => {
           deleteParkedQueueEntry(normalizedToken);
           deleteQueueEntry(socket.id, normalizedToken);
           await emitGameStatePersisted(roomFromReconnect);
+          emitChatHistoryToPlayer(roomFromReconnect, socket.id, true);
           if (
             roomFromReconnect.vsBot &&
             roomFromReconnect.botId &&
@@ -1653,6 +1711,14 @@ const onSearchCancel = async (socket: Socket, _payload: SearchCancelPayload) => 
     return;
   }
   const room = getRoomForPlayer(socket.id);
+  if (room && room.over) {
+    socket.emit("game:error", { message: "Brak aktywnej gry." });
+    socket.emit("game:cancelled", {
+      reason: "search_cancelled",
+      message: "Brak aktywnej gry.",
+    });
+    return;
+  }
   if (room) {
     await onGameCancel(socket, {});
     return;
@@ -1810,6 +1876,74 @@ const onGameShot = async (socket: Socket, payload: GameShotPayload) => {
   await emitGameStatePersisted(room);
 };
 
+const onChatSend = async (socket: Socket, payload: ChatSendPayload) => {
+  if (guardSoftBan(socket)) return;
+  if (await isRateLimitedByIdentity(socket, "chat_send", RATE_LIMITS.CHAT_PER_WINDOW, RATE_LIMITS.CHAT_WINDOW_MS)) {
+    socket.emit("game:error", {
+      code: "chat_rate_limited",
+      message: "Za dużo wiadomości czatu. Spróbuj ponownie za chwilę.",
+    });
+    return;
+  }
+
+  const room = getRoomForPlayer(socket.id);
+  if (!room || room.vsBot || room.status === "cancelled") {
+    socket.emit("game:error", {
+      code: "chat_not_allowed",
+      message: "Czat jest dostępny tylko w meczu online PvP.",
+    });
+    return;
+  }
+  if (payload.roomId !== undefined) {
+    const requestedRoomId = normalizeRoomId(payload.roomId);
+    if (!requestedRoomId || requestedRoomId !== room.roomId) {
+      socket.emit("game:error", {
+        code: "chat_room_mismatch",
+        message: "Nieprawidłowy pokój czatu.",
+      });
+      return;
+    }
+  }
+  if (!(room.phase === "setup" || room.phase === "playing" || room.phase === "over")) {
+    socket.emit("game:error", {
+      code: "chat_not_allowed",
+      message: "Czat jest niedostępny w tym etapie gry.",
+    });
+    return;
+  }
+
+  const message: ChatMessage = {
+    id: `chat-${++room.chatSeq}-${randomBytes(4).toString("hex")}`,
+    roomId: room.roomId,
+    senderId: socket.id,
+    senderName: room.nicknames[socket.id] ?? "Gracz",
+    kind: payload.kind,
+    createdAt: Date.now(),
+  };
+  if (payload.kind === "text") message.text = payload.text;
+  if (payload.kind === "emoji") message.emoji = payload.emoji;
+  if (payload.kind === "gif") message.gifId = payload.gifId;
+
+  room.chatMessages.push(message);
+  if (room.chatMessages.length > CHAT_HISTORY_MAX) {
+    room.chatMessages = room.chatMessages.slice(-CHAT_HISTORY_MAX);
+  }
+  room.lastActionTs = Date.now();
+  const outgoing: ChatMessagePayload = {
+    roomId: room.roomId,
+    message,
+  };
+  io.to(room.roomId).emit("chat:message", outgoing);
+  recordMatchEvent(room.roomId, "chat_message", {
+    roomId: room.roomId,
+    senderId: socket.id,
+    kind: payload.kind,
+    length: payload.text?.length ?? 0,
+    at: Date.now(),
+  });
+  persistRoomSnapshot(room);
+};
+
 const onGameCancel = async (socket: Socket, _payload: GameCancelPayload) => {
   if (guardSoftBan(socket)) return;
   if (await isRateLimitedByIdentity(socket, "game_cancel", RATE_LIMITS.GAME_CANCEL_PER_WINDOW, RATE_LIMITS.JOIN_WINDOW_MS)) {
@@ -1840,11 +1974,13 @@ const onGameCancel = async (socket: Socket, _payload: GameCancelPayload) => {
       room.over = true;
       room.status = "cancelled";
       room.phase = "over";
+      room.postGameExpiresAt = Date.now() + POST_GAME_CHAT_TTL_MS;
+      room.lastActionTs = Date.now();
       recordNoWinnerSummary(room, "manual_cancel");
       emitGameOver(room, null, "manual_cancel");
       emitGameState(room);
     }
-    removeRoom(room);
+    persistRoomSnapshot(room);
     return;
   }
 
@@ -1925,10 +2061,12 @@ const onDisconnect = async (socket: Socket) => {
     room.over = true;
     room.status = "ended";
     room.phase = "over";
+    room.postGameExpiresAt = Date.now() + POST_GAME_CHAT_TTL_MS;
+    room.lastActionTs = Date.now();
     recordNoWinnerSummary(room, "disconnect");
     emitGameOver(room, null, "disconnect");
     emitGameState(room);
-    removeRoom(room);
+    persistRoomSnapshot(room);
   }
   clearRateState(socket.id);
   clearInvalidInputState(socket.id);
@@ -1963,6 +2101,8 @@ const cleanupDisconnectedPlayers = () => {
         room.status = "ended";
         room.phase = "over";
         room.winner = undefined;
+        room.postGameExpiresAt = Date.now() + POST_GAME_CHAT_TTL_MS;
+        room.lastActionTs = Date.now();
         recordNoWinnerSummary(room, "disconnect");
         recordMatchEvent(room.roomId, "disconnect_timeout_no_winner", {
           roomId: room.roomId,
@@ -1970,7 +2110,7 @@ const cleanupDisconnectedPlayers = () => {
           at: Date.now(),
         });
         emitGameOver(room, null, "disconnect", "Gra zakończona z powodu braku połączenia.");
-        removeRoom(room);
+        persistRoomSnapshot(room);
       }
       break;
     }
@@ -1992,6 +2132,8 @@ const cleanupInactiveRooms = () => {
     room.over = true;
     room.status = "ended";
     room.phase = "over";
+    room.postGameExpiresAt = Date.now() + POST_GAME_CHAT_TTL_MS;
+    room.lastActionTs = Date.now();
     recordNoWinnerSummary(room, "inactivity_timeout");
     io.to(room.roomId).emit("game:error", {
       message: "Gra zakończona z powodu braku aktywności.",
@@ -2001,6 +2143,21 @@ const cleanupInactiveRooms = () => {
       at: Date.now(),
     });
     emitGameOver(room, null, "inactivity_timeout");
+    persistRoomSnapshot(room);
+  }
+};
+
+const cleanupOverRooms = () => {
+  const now = Date.now();
+  const finishedRooms: GameRoom[] = [];
+  for (const room of rooms.values()) {
+    if (!room.over) continue;
+    const expiresAt = room.postGameExpiresAt ?? room.lastActionTs + POST_GAME_CHAT_TTL_MS;
+    if (now >= expiresAt) {
+      finishedRooms.push(room);
+    }
+  }
+  for (const room of finishedRooms) {
     removeRoom(room);
   }
 };
@@ -2013,6 +2170,7 @@ registerSocketHandlers(io, {
   onSearchCancel,
   onGamePlaceShips,
   onGameShot,
+  onChatSend,
   onGameCancel,
   onDisconnect,
   onInvalidInput: (socket, eventName) => {
@@ -2039,6 +2197,7 @@ const maintenanceTimer = setInterval(() => {
   cleanupExpiredTokens();
   cleanupRateState();
   cleanupInvalidInputState();
+  cleanupOverRooms();
   cleanupInactiveRooms();
   cleanupDisconnectedPlayers();
 }, MAINTENANCE_INTERVAL_MS);
