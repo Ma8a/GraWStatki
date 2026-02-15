@@ -258,8 +258,10 @@ const chatPanelEl = $("#chatPanel") as HTMLDivElement;
 const chatListEl = $("#chatList") as HTMLDivElement;
 const chatInputEl = $("#chatInput") as HTMLInputElement;
 const chatSendBtnEl = $("#chatSendBtn") as HTMLButtonElement;
+const chatShortcutHintEl = $("#chatShortcutHint") as HTMLParagraphElement;
 const chatHintEl = $("#chatHint") as HTMLParagraphElement;
 const chatGifToggleEl = $("#chatGifToggle") as HTMLButtonElement;
+const chatMuteBtnEl = $("#chatMuteBtn") as HTMLButtonElement;
 const chatGifBarEl = $("#chatGifBar") as HTMLDivElement;
 const chatUnreadEl = $("#chatUnread") as HTMLSpanElement;
 const chatEmojiButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chat-emoji]"));
@@ -279,6 +281,7 @@ const langPlBtn = $("#langPlBtn") as HTMLButtonElement;
 const langEnBtn = $("#langEnBtn") as HTMLButtonElement;
 
 const socket = typeof io !== "undefined" ? io() : null;
+const baseDocumentTitle = document.title;
 
 let online = false;
 let inQueue = false;
@@ -303,10 +306,13 @@ let hoverCoord: Coord | null = null;
 let chatGifOpen = false;
 const RECONNECT_TOKEN_KEY = "battleship_reconnect_token";
 const LANGUAGE_KEY = "battleship_language";
+const CHAT_MUTED_KEY = "battleship_chat_muted";
 const RECONNECT_GRACE_MS_FALLBACK = 3_000;
 let language: Lang = "pl";
 let statusRaw = "";
 let winnerFxTimer: ReturnType<typeof setTimeout> | null = null;
+let chatMuted = false;
+let chatAudioCtx: AudioContext | null = null;
 let chatState: ChatState = {
   enabled: false,
   messages: [],
@@ -395,11 +401,17 @@ const I18N: Record<Lang, Record<string, string>> = {
     winnerTitle: "ZWYCIEZCA",
     chatTitle: "Czat online",
     chatPlaceholder: "Napisz wiadomość...",
+    chatShortcutHint: "Skróty: / fokus, Enter wysyła, Esc zamyka GIF, klik poza zamyka GIF.",
+    chatSendHint: "Enter wysyła wiadomość",
+    chatGifToggleHint: "GIF reakcje (Esc zamyka panel)",
+    chatMuteHint: "Ustawienie dźwięku zapisuje się lokalnie",
     chatSend: "Wyślij",
     chatHintDisabled: "Czat działa tylko w meczu online PvP.",
     chatHintEnabled: "Czat aktywny: setup / gra / koniec gry (60s).",
     chatEmoji: "Emoji",
     chatGifs: "GIF reakcje",
+    chatMute: "Wycisz",
+    chatUnmute: "Włącz dźwięk",
     chatYou: "Ty",
     chatOpponent: "Przeciwnik",
     chatSystem: "System",
@@ -446,11 +458,17 @@ const I18N: Record<Lang, Record<string, string>> = {
     winnerTitle: "WINNER",
     chatTitle: "Online Chat",
     chatPlaceholder: "Type a message...",
+    chatShortcutHint: "Shortcuts: / focuses chat, Enter sends, Esc closes GIF, click outside closes GIF.",
+    chatSendHint: "Press Enter to send",
+    chatGifToggleHint: "GIF reactions (Esc closes panel)",
+    chatMuteHint: "Sound preference is saved locally",
     chatSend: "Send",
     chatHintDisabled: "Chat is available only in online PvP match.",
     chatHintEnabled: "Chat active: setup / playing / game over (60s).",
     chatEmoji: "Emoji",
     chatGifs: "GIF reactions",
+    chatMute: "Mute",
+    chatUnmute: "Unmute",
     chatYou: "You",
     chatOpponent: "Opponent",
     chatSystem: "System",
@@ -480,6 +498,22 @@ const getStoredLanguage = (): Lang => {
 const storeLanguage = (value: Lang) => {
   try {
     localStorage.setItem(LANGUAGE_KEY, value);
+  } catch {
+    // Ignore storage issues.
+  }
+};
+
+const getStoredChatMuted = (): boolean => {
+  try {
+    return localStorage.getItem(CHAT_MUTED_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+const storeChatMuted = (value: boolean) => {
+  try {
+    localStorage.setItem(CHAT_MUTED_KEY, value ? "1" : "0");
   } catch {
     // Ignore storage issues.
   }
@@ -759,6 +793,7 @@ const storeReconnectToken = (value: string | null) => {
 
 reconnectToken = getStoredReconnectToken();
 language = getStoredLanguage();
+chatMuted = getStoredChatMuted();
 applyNicknameDefaultForLanguage(language);
 
 const applyStaticTranslations = () => {
@@ -789,8 +824,17 @@ const applyStaticTranslations = () => {
   chatTitleEl.textContent = t("chatTitle");
   chatPanelEl.setAttribute("aria-label", t("chatTitle"));
   chatInputEl.placeholder = t("chatPlaceholder");
+  chatInputEl.title = t("chatShortcutHint");
+  chatShortcutHintEl.textContent = t("chatShortcutHint");
   chatSendBtnEl.textContent = t("chatSend");
+  chatSendBtnEl.title = t("chatSendHint");
+  chatSendBtnEl.setAttribute("aria-label", `${t("chatSend")} - ${t("chatSendHint")}`);
   chatGifToggleEl.textContent = t("chatGifs");
+  chatGifToggleEl.title = t("chatGifToggleHint");
+  chatGifToggleEl.setAttribute("aria-label", t("chatGifToggleHint"));
+  chatMuteBtnEl.textContent = chatMuted ? t("chatUnmute") : t("chatMute");
+  chatMuteBtnEl.title = `${chatMuteBtnEl.textContent} - ${t("chatMuteHint")}`;
+  chatMuteBtnEl.setAttribute("aria-label", chatMuteBtnEl.title);
   chatEmojiButtons.forEach((button) => {
     button.title = `${t("chatEmoji")} ${button.dataset.chatEmoji ?? ""}`.trim();
     button.setAttribute("aria-label", button.title);
@@ -798,11 +842,16 @@ const applyStaticTranslations = () => {
   chatGifButtons.forEach((button) => {
     const gifId = button.dataset.chatGif as (typeof CHAT_GIF_IDS)[number] | undefined;
     if (!gifId || !(gifId in CHAT_GIF_LABELS)) return;
-    button.title = CHAT_GIF_LABELS[gifId][language];
+    const gifLabel = CHAT_GIF_LABELS[gifId][language];
+    button.title = gifLabel;
     button.setAttribute("aria-label", button.title);
     const label = button.querySelector(".chat-gif__label");
     if (label) {
-      label.textContent = CHAT_GIF_LABELS[gifId][language];
+      label.textContent = gifLabel;
+    }
+    const image = button.querySelector("img");
+    if (image) {
+      image.alt = gifLabel;
     }
   });
   langPlBtn.classList.toggle("active", language === "pl");
@@ -911,16 +960,79 @@ const chatMessageBody = (message: ChatMessage): string => {
 };
 
 const chatGifSrc = (gifId: string): string => `/assets/chat-gifs/${gifId}.gif`;
+const isChatNearBottom = (): boolean => {
+  const distanceFromBottom = chatListEl.scrollHeight - (chatListEl.scrollTop + chatListEl.clientHeight);
+  return distanceFromBottom <= 24;
+};
+
+const updateDocumentUnreadBadge = () => {
+  if (chatState.unread > 0 && document.hidden) {
+    document.title = `(${chatState.unread}) ${baseDocumentTitle}`;
+    return;
+  }
+  document.title = baseDocumentTitle;
+};
+
+const updateChatComposerState = () => {
+  const hasText = chatInputEl.value.trim().length > 0;
+  chatSendBtnEl.disabled = !chatState.enabled || !hasText;
+};
+
+const playChatPing = () => {
+  if (chatMuted) return;
+  try {
+    if (!chatAudioCtx) {
+      const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      chatAudioCtx = new AudioCtx();
+    }
+    if (chatAudioCtx.state === "suspended") {
+      void chatAudioCtx.resume();
+    }
+    const osc = chatAudioCtx.createOscillator();
+    const gain = chatAudioCtx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(830, chatAudioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(620, chatAudioCtx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.0001, chatAudioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.06, chatAudioCtx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, chatAudioCtx.currentTime + 0.14);
+    osc.connect(gain);
+    gain.connect(chatAudioCtx.destination);
+    osc.start();
+    osc.stop(chatAudioCtx.currentTime + 0.15);
+  } catch {
+    // Best-effort only.
+  }
+};
 
 const renderChat = () => {
   chatState.enabled = isChatEnabled();
+  const previousScrollTop = chatListEl.scrollTop;
+  const shouldStickToBottom = isChatNearBottom();
   chatPanelEl.classList.toggle("chat-panel--disabled", !chatState.enabled);
   chatInputEl.disabled = !chatState.enabled;
-  chatSendBtnEl.disabled = !chatState.enabled;
   chatGifToggleEl.disabled = !chatState.enabled;
+  chatMuteBtnEl.disabled = !chatState.enabled;
+  chatEmojiButtons.forEach((button) => {
+    button.disabled = !chatState.enabled;
+  });
+  chatGifButtons.forEach((button) => {
+    button.disabled = !chatState.enabled;
+  });
+  chatMuteBtnEl.textContent = chatMuted ? t("chatUnmute") : t("chatMute");
+  chatMuteBtnEl.title = `${chatMuteBtnEl.textContent} - ${t("chatMuteHint")}`;
+  chatMuteBtnEl.setAttribute("aria-label", chatMuteBtnEl.title);
+  chatMuteBtnEl.classList.toggle("chat-panel__toggle--active", chatMuted);
+  chatMuteBtnEl.setAttribute("aria-pressed", chatMuted ? "true" : "false");
+  chatGifToggleEl.classList.toggle("chat-panel__toggle--active", chatState.enabled && chatGifOpen);
+  chatGifToggleEl.setAttribute("aria-expanded", chatState.enabled && chatGifOpen ? "true" : "false");
   chatGifBarEl.hidden = !chatState.enabled || !chatGifOpen;
   chatHintEl.textContent = chatState.enabled ? t("chatHintEnabled") : t("chatHintDisabled");
   chatUnreadEl.textContent = chatState.unread > 0 ? t("chatUnread", { count: chatState.unread }) : "";
+  chatUnreadEl.classList.toggle("chat-panel__unread--active", chatState.unread > 0);
+  updateDocumentUnreadBadge();
+  updateChatComposerState();
 
   chatListEl.innerHTML = "";
   for (const message of chatState.messages) {
@@ -957,7 +1069,11 @@ const renderChat = () => {
     item.append(head, body);
     chatListEl.appendChild(item);
   }
-  chatListEl.scrollTop = chatListEl.scrollHeight;
+  if (shouldStickToBottom) {
+    chatListEl.scrollTop = chatListEl.scrollHeight;
+  } else {
+    chatListEl.scrollTop = previousScrollTop;
+  }
 };
 
 const replaceChatHistory = (messages: ChatMessage[]) => {
@@ -970,9 +1086,19 @@ const appendChatMessage = (message: ChatMessage) => {
   if (chatState.messages.length > 80) {
     chatState.messages = chatState.messages.slice(-80);
   }
-  if (document.hidden && message.senderId !== yourId) {
+  const incomingFromOpponent = message.kind !== "system" && message.senderId !== yourId;
+  if (incomingFromOpponent && (document.hidden || !isChatNearBottom())) {
     chatState.unread += 1;
   }
+  if (incomingFromOpponent && chatState.enabled && !document.hidden) {
+    playChatPing();
+  }
+};
+
+const clearChatUnread = () => {
+  if (chatState.unread <= 0) return;
+  chatState.unread = 0;
+  render();
 };
 
 const emitChatSend = (payload: ChatSendPayload) => {
@@ -1776,6 +1902,7 @@ chatSendBtnEl.addEventListener("click", () => {
   if (!text) return;
   emitChatSend({ kind: "text", text });
   chatInputEl.value = "";
+  updateChatComposerState();
 });
 
 chatInputEl.addEventListener("keydown", (event) => {
@@ -1785,10 +1912,21 @@ chatInputEl.addEventListener("keydown", (event) => {
   if (!text) return;
   emitChatSend({ kind: "text", text });
   chatInputEl.value = "";
+  updateChatComposerState();
+});
+
+chatInputEl.addEventListener("input", () => {
+  updateChatComposerState();
 });
 
 chatGifToggleEl.addEventListener("click", () => {
   chatGifOpen = !chatGifOpen;
+  render();
+});
+
+chatMuteBtnEl.addEventListener("click", () => {
+  chatMuted = !chatMuted;
+  storeChatMuted(chatMuted);
   render();
 });
 
@@ -1810,9 +1948,48 @@ chatGifButtons.forEach((button) => {
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
-    chatState.unread = 0;
-    render();
+    clearChatUnread();
   }
+});
+
+window.addEventListener("focus", () => {
+  clearChatUnread();
+});
+
+chatPanelEl.addEventListener("pointerenter", () => {
+  clearChatUnread();
+});
+
+chatPanelEl.addEventListener("focusin", () => {
+  clearChatUnread();
+});
+
+chatListEl.addEventListener("scroll", () => {
+  if (!document.hidden && isChatNearBottom()) {
+    clearChatUnread();
+  }
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (!chatGifOpen) return;
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (target.closest("#chatGifBar") || target.closest("#chatGifToggle")) return;
+  chatGifOpen = false;
+  render();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && chatGifOpen) {
+    chatGifOpen = false;
+    render();
+    return;
+  }
+  if (event.key !== "/") return;
+  if (!chatState.enabled || document.hidden) return;
+  if (isTypingContext(document.activeElement)) return;
+  event.preventDefault();
+  chatInputEl.focus();
 });
 
 boardOwnEl.addEventListener("mouseleave", () => {

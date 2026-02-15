@@ -86,6 +86,9 @@
           <input id="chatInput" type="text" maxlength="240" placeholder="Napisz wiadomość..." />
           <button id="chatSendBtn" type="button">Wyślij</button>
         </div>
+        <p id="chatShortcutHint" class="chat-panel__shortcut">
+          Skróty: / fokus, Enter wysyła, Esc zamyka GIF, klik poza zamyka GIF.
+        </p>
         <div class="chat-panel__actions">
           <div class="chat-panel__emoji">
             <button type="button" data-chat-emoji="💥">💥</button>
@@ -97,7 +100,8 @@
             <button type="button" data-chat-emoji="👏">👏</button>
             <button type="button" data-chat-emoji="🤝">🤝</button>
           </div>
-          <button id="chatGifToggle" type="button">GIF reakcje</button>
+          <button id="chatMuteBtn" type="button">Wycisz</button>
+          <button id="chatGifToggle" type="button" aria-expanded="false">GIF reakcje</button>
         </div>
         <div id="chatGifBar" class="chat-gif-bar" hidden>
           <button type="button" class="chat-gif" data-chat-gif="direct_hit">

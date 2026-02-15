@@ -667,6 +667,14 @@ button.cell {
   font-weight: 700;
 }
 
+.chat-panel__unread--active {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 184, 112, 0.2);
+  border: 1px solid rgba(255, 184, 112, 0.5);
+  animation: chat-unread-pulse 800ms ease-in-out infinite;
+}
+
 .chat-panel__hint {
   margin: 0;
   color: var(--text-muted);
@@ -745,6 +753,13 @@ button.cell {
   gap: 8px;
 }
 
+.chat-panel__shortcut {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .chat-panel__composer input {
   flex: 1;
   border: 1px solid rgba(179, 215, 245, 0.42);
@@ -774,6 +789,12 @@ button.cell {
   border-color: var(--accent);
   background: rgba(99, 212, 255, 0.16);
   transform: translateY(-1px);
+}
+
+.chat-panel__actions .chat-panel__toggle--active {
+  border-color: rgba(255, 184, 112, 0.75);
+  background: rgba(255, 184, 112, 0.2);
+  color: #ffe9ce;
 }
 
 .chat-panel__actions {
@@ -839,6 +860,29 @@ button.cell {
   }
   100% {
     transform: scale(1);
+  }
+}
+
+@keyframes chat-unread-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 184, 112, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 8px rgba(255, 184, 112, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message {
+    animation: none;
+  }
+
+  .chat-gif {
+    animation: none;
+  }
+
+  .chat-panel__unread--active {
+    animation: none;
   }
 }
 
