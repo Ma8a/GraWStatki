@@ -13,13 +13,18 @@
     "test:socketflow": "npm run build && node --test --test-concurrency=1 tests/socketflow.test.js",
     "test:db-retention": "node --test --test-concurrency=1 tests/db-retention.test.js",
     "test:all": "npm run test:core && npm run test:socketflow && npm run test:db-retention",
+    "ci:local": "npm run db:init && npm run lint && npm run test:core && npm run test:socketflow && npm run test:db-retention && npm run security",
     "test:socket-cors": "npm run build && node --test --test-concurrency=1 --test-name-pattern \"^socket\" tests/socketflow.test.js",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "db:init": "node scripts/db-init.js",
+    "db:init:local": "node scripts/run-with-local-env.js npm run db:init",
     "db:retention": "node scripts/db-retention.js",
+    "test:socketflow:local": "node scripts/run-with-local-env.js npm run test:socketflow",
+    "test:all:local": "node scripts/run-with-local-env.js npm run test:all",
     "security": "npm audit --audit-level=high",
     "verify": "npm run lint && npm test && npm run security",
+    "ci:local:quick": "npm run db:init:local && npm run lint && npm run test:core && npm run test:socketflow:local",
     "start": "node dist/server/server/index.js"
   },
   "dependencies": {

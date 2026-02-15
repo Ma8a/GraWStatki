@@ -46,5 +46,7 @@ jobs:
       - run: npm run db:init
       - run: npm run lint
       - run: npm run build
-      - run: npm test
+      - run: npm run test:core
+      - run: npm run test:socketflow
+      - run: npm run test:db-retention
       - run: npm run security

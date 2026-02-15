@@ -5960,7 +5960,7 @@ test("queue reconnect token is blocked by stale redis presence and recovers afte
     const conflictPayload = await conflict;
     assert.equal(conflictPayload.code, "reconnect_token_expired");
 
-    await sleep(3_100);
+    await sleep(3_600);
 
     const recovered = waitForEventFiltered(
       attacker,
@@ -6032,7 +6032,7 @@ test("active game reconnect token is blocked by stale redis presence and restore
     const conflictPayload = await conflict;
     assert.equal(conflictPayload.code, "reconnect_token_expired");
 
-    await sleep(3_100);
+    await sleep(3_600);
 
     const restoredSignal = waitForEventFiltered(
       attacker,

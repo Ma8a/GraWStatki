@@ -1,4 +1,5 @@
 const { Client } = require("pg");
+require("dotenv").config();
 
 const parseBool = (value) => {
   const normalized = String(value ?? "").trim().toLowerCase();
