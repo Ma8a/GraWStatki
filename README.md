@@ -22,7 +22,11 @@
 
 ```bash
 npm install
-# optional: cp .env.example .env
+# required for DB/Redis scripts: cp .env.example .env
+# optional: start dependencies for local development
+# docker compose up -d redis postgres
+# optional: initialize schema once
+# npm run db:init
 npm run build
 npm start
 ```
@@ -92,6 +96,18 @@ Skrócony check one-shot:
 npm run verify
 ```
 
+Lokalny gate identyczny z CI (db init + lint + wszystkie testy + security):
+
+```bash
+npm run ci:local
+```
+
+Szybki gate developerski (bez `security` i bez testu retencji DB):
+
+```bash
+npm run ci:local:quick
+```
+
 ## Docker / środowisko produkcyjne (stack)
 
 Minimalny stack deweloperski:
@@ -110,6 +126,14 @@ Możesz go zastosować ręcznie:
 
 ```bash
 npm run db:init
+```
+
+Skróty lokalne (automatycznie ustawiają domyślne `REDIS_URL` i `DATABASE_URL`, jeśli ich nie ma):
+
+```bash
+npm run db:init:local
+npm run test:socketflow:local
+npm run test:all:local
 ```
 
 `docker compose` montuje też `db/schema.sql` do `docker-entrypoint-initdb.d`, więc przy pierwszym starcie czystego wolumenu `pgdata` schemat wykona się automatycznie.
@@ -133,8 +157,10 @@ Workflow `CI` (`.github/workflows/ci.yml`) uruchamia:
 2. `npm run db:init` (na serwisie PostgreSQL w GitHub Actions)
 3. `npm run lint`
 4. `npm run build`
-5. `npm test`
-6. `npm run security`
+5. `npm run test:core`
+6. `npm run test:socketflow`
+7. `npm run test:db-retention`
+8. `npm run security`
 
 W CI ustawione są `DATABASE_REQUIRED=1` i `REDIS_REQUIRED=1`, więc readiness i testy przechodzą przez realny PostgreSQL oraz Redis.
 
@@ -325,6 +351,29 @@ Status gotowości w online:
    - po chwili druga strona również może kliknąć,
    - obie sesje muszą ostatecznie wejść do tej samej kolejki (lub tego samego trybu ponownego matchu), bez zawieszenia UI.
 
+### Testy frontu (manualne): chat `mute/unmute` + unread
+
+1. Uruchom mecz online PvP na dwóch sesjach.
+2. Na sesji A kliknij `Wycisz` / `Mute`.
+3. Wyślij wiadomość z sesji B:
+   - sesja A nie powinna odtworzyć sygnału audio,
+   - wiadomość nadal musi być widoczna na liście.
+4. Na sesji A kliknij `Włącz dźwięk` / `Unmute`.
+5. Wyślij kolejną wiadomość z sesji B:
+   - sesja A powinna odtworzyć krótki sygnał.
+6. Sprawdź `unread`:
+   - przejdź na inną kartę/przeglądarkę (sesja A w tle),
+   - wyślij 2-3 wiadomości z sesji B,
+   - po powrocie na sesję A licznik `Nowe/Unread` powinien się wyzerować.
+
+### Skróty i zachowanie panelu czatu
+
+1. `/` (slash) fokusuje pole wpisywania wiadomości, jeśli czat jest aktywny i fokus nie jest w innym polu tekstowym.
+2. `Enter` w polu czatu wysyła wiadomość.
+3. `Esc` zamyka panel GIF reakcji, jeśli jest otwarty.
+4. Kliknięcie poza panelem GIF również go zamyka.
+5. Przycisk `Wycisz/Mute` zapisuje preferencję lokalnie (`localStorage`) i utrzymuje ją po odświeżeniu strony.
+
 ### Testy frontu (manualne): rozłączenie i reconnect
 
 1. Przygotuj jedną udaną mecz online z dwoma sesjami (`A` i `B`).
@@ -377,3 +426,56 @@ Status gotowości w online:
    - online `game:over -> Nowa gra online`,
    - disconnect/reconnect w `ROOM_RECONNECT_GRACE_MS`,
    - restart serwera (Redis) + reconnect i spójność `shots/sunkCells`.
+
+## Procedura release (krok po kroku)
+
+1. Zaktualizuj branch lokalny i rozwiąż ewentualne konflikty.
+2. Upewnij się, że środowisko lokalne ma aktywne Redis/PostgreSQL (`docker compose up -d redis postgres`).
+3. Uruchom pełny gate:
+   - `npm run ci:local`
+4. Zweryfikuj manualny smoke online (`game:over -> nowa gra online`, reconnect, restart).
+5. Zacommituj zmiany i wypchnij branch:
+   - `git add .`
+   - `git commit -m "..."` 
+   - `git push`
+6. Otwórz PR i poczekaj na zielone workflow `CI`.
+7. Po merge wykonaj tag release (opcjonalnie) i aktualizuj changelog/release notes.
+
+## Granica bezpieczeństwa tej wersji (ważne)
+
+Ta wersja jest istotnie utwardzona względem payload abuse i cheatów protokołu gry, ale nie jest systemem klasy enterprise „nie do zhakowania”.
+
+### Co jest już zabezpieczone
+
+- Serwer jest `server-authoritative` dla stanu rozgrywki.
+- Walidacja payloadów socket (`invalid_payload`) i soft-ban na flood błędnych żądań.
+- Rate-limit na krytyczne eventy (`search:join`, `game:shot`, `game:place_ships`, `game:cancel`, `search:cancel`, `chat:send`).
+- Ograniczony CORS + opcjonalne wymaganie `Origin` (`REQUIRE_ORIGIN_HEADER`).
+- Reconnect tokeny z TTL i ochrona konfliktów aktywnej sesji.
+- Czat PvP: brak dowolnych URL GIF, whitelist emoji/GIF, sender ustalany wyłącznie po stronie serwera.
+
+### Czego ta wersja jeszcze nie daje
+
+- Brak kont użytkowników i autoryzacji per user/session.
+- Brak WAF i ochrony DDoS na warstwie edge.
+- Brak anti-bot edge (np. challenge/rate shaping na CDN/LB).
+- Brak centralnej polityki bezpieczeństwa typu SOC/IDS/SIEM.
+
+## Production hardening checklist (kolejny etap)
+
+1. Reverse proxy + TLS:
+   - uruchomienie za Nginx/Traefik/Cloudflare,
+   - wymuszenie HTTPS i HSTS.
+2. Edge security:
+   - WAF reguły na handshake i endpointy HTTP,
+   - DDoS protection/rate shaping przed aplikacją.
+3. Auth/session layer:
+   - token sesji gracza (minimum),
+   - docelowo pełne konto + rotacja tokenów.
+4. Sekrety i runtime:
+   - silne hasła Redis/PostgreSQL,
+   - izolowane sieci i minimalne uprawnienia kont DB,
+   - osobne env dla dev/stage/prod.
+5. Monitoring/alerting:
+   - alert na skoki `invalid_payload`, `soft_ban`, reconnect conflict,
+   - alert na degradację `/ready` i wysokie opóźnienia socketflow.
