@@ -75,7 +75,7 @@
         </div>
       </section>
 
-      <section id="chatPanel" class="chat-panel" aria-label="Czat online">
+      <section id="chatPanel" class="chat-panel chat-panel--floating" aria-label="Czat online">
         <div class="chat-panel__header">
           <h3 id="chatTitle" class="chat-panel__title">Czat online</h3>
           <span id="chatUnread" class="chat-panel__unread"></span>
@@ -105,27 +105,31 @@
         </div>
         <div id="chatGifBar" class="chat-gif-bar" hidden>
           <button type="button" class="chat-gif" data-chat-gif="direct_hit">
-            <img src="/assets/chat-gifs/direct_hit.gif" alt="Direct hit" />
+            <img src="/assets/chat-gifs/direct_hit.gif?v=4" alt="Direct hit" />
             <span class="chat-gif__label">Celny strzał</span>
           </button>
           <button type="button" class="chat-gif" data-chat-gif="missed_shot">
-            <img src="/assets/chat-gifs/missed_shot.gif" alt="Missed shot" />
+            <img src="/assets/chat-gifs/missed_shot.gif?v=4" alt="Missed shot" />
             <span class="chat-gif__label">Pudło</span>
           </button>
           <button type="button" class="chat-gif" data-chat-gif="ship_sunk">
-            <img src="/assets/chat-gifs/ship_sunk.gif" alt="Ship sunk" />
+            <img src="/assets/chat-gifs/ship_sunk.gif?v=4" alt="Ship sunk" />
             <span class="chat-gif__label">Statek zatopiony</span>
           </button>
           <button type="button" class="chat-gif" data-chat-gif="nice_move">
-            <img src="/assets/chat-gifs/nice_move.gif" alt="Nice move" />
+            <img src="/assets/chat-gifs/nice_move.gif?v=4" alt="Nice move" />
             <span class="chat-gif__label">Dobry ruch</span>
           </button>
           <button type="button" class="chat-gif" data-chat-gif="gg">
-            <img src="/assets/chat-gifs/gg.gif" alt="GG" />
+            <img src="/assets/chat-gifs/gg.gif?v=4" alt="GG" />
             <span class="chat-gif__label">GG</span>
           </button>
         </div>
       </section>
+      <button id="chatLauncher" class="chat-launcher chat-corner-bottom-right" type="button" aria-label="Open chat" title="Open chat">
+        <span class="chat-launcher__icon" aria-hidden="true">💬</span>
+        <span id="chatLauncherUnread" class="chat-launcher__unread"></span>
+      </button>
 
       <section class="boards">
         <article class="board-card">
@@ -143,8 +147,6 @@
       <div class="winner-fx__backdrop"></div>
       <div id="winnerFxConfetti" class="winner-fx__confetti"></div>
       <div class="winner-fx__scene">
-        <div class="winner-fx__cannon" aria-hidden="true"></div>
-        <div class="winner-fx__ball" aria-hidden="true"></div>
         <div class="winner-fx__explosion" aria-hidden="true"></div>
         <div class="winner-fx__center">
           <div id="winnerFxTitle" class="winner-fx__title">WINNER</div>

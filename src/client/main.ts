@@ -51,6 +51,7 @@ type PlacementPreview = {
   keys: Set<string>;
   valid: boolean;
 };
+type ChatDockCorner = "bottom-right" | "bottom-left" | "top-right" | "top-left";
 
 interface ChatState {
   enabled: boolean;
@@ -264,6 +265,8 @@ const chatGifToggleEl = $("#chatGifToggle") as HTMLButtonElement;
 const chatMuteBtnEl = $("#chatMuteBtn") as HTMLButtonElement;
 const chatGifBarEl = $("#chatGifBar") as HTMLDivElement;
 const chatUnreadEl = $("#chatUnread") as HTMLSpanElement;
+const chatLauncherEl = $("#chatLauncher") as HTMLButtonElement;
+const chatLauncherUnreadEl = $("#chatLauncherUnread") as HTMLSpanElement;
 const chatEmojiButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chat-emoji]"));
 const chatGifButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chat-gif]"));
 
@@ -303,16 +306,26 @@ let previousCanShoot = false;
 let autoReconnectQueued = false;
 let reconnectToken: string | null = null;
 let hoverCoord: Coord | null = null;
+let boardTouchLastTapTs = 0;
 let chatGifOpen = false;
 const RECONNECT_TOKEN_KEY = "battleship_reconnect_token";
 const LANGUAGE_KEY = "battleship_language";
 const CHAT_MUTED_KEY = "battleship_chat_muted";
+const CHAT_COLLAPSED_KEY = "battleship_chat_collapsed";
+const CHAT_DOCK_KEY = "battleship_chat_dock";
 const RECONNECT_GRACE_MS_FALLBACK = 3_000;
 let language: Lang = "pl";
 let statusRaw = "";
 let winnerFxTimer: ReturnType<typeof setTimeout> | null = null;
 let chatMuted = false;
 let chatAudioCtx: AudioContext | null = null;
+let chatCollapsed = false;
+let chatDock: ChatDockCorner = "bottom-right";
+let chatLauncherPointerId: number | null = null;
+let chatLauncherDragging = false;
+let chatLauncherDragged = false;
+let chatLauncherDragStartX = 0;
+let chatLauncherDragStartY = 0;
 let chatState: ChatState = {
   enabled: false,
   messages: [],
@@ -377,7 +390,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     legendHit: "💥 Trafienie",
     legendMiss: "· Pudło",
     legendSunk: "🛳️ Zatopiony segment",
-    hintPlacement: "Ustawianie: PPM / scroll / R = obrót",
+    hintPlacement: "Ustawianie: PPM / scroll / R / podwójny tap = obrót",
     btnRotate: "Obróć ręczny (H/V)",
     btnAuto: "Losowe rozstawienie",
     btnClear: "Wyczyść do ręcznego",
@@ -412,6 +425,9 @@ const I18N: Record<Lang, Record<string, string>> = {
     chatGifs: "GIF reakcje",
     chatMute: "Wycisz",
     chatUnmute: "Włącz dźwięk",
+    chatOpen: "Pokaż czat",
+    chatHide: "Ukryj czat",
+    chatMoveHint: "Przeciągnij, aby przenieść do innego rogu",
     chatYou: "Ty",
     chatOpponent: "Przeciwnik",
     chatSystem: "System",
@@ -434,7 +450,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     legendHit: "💥 Hit",
     legendMiss: "· Miss",
     legendSunk: "🛳️ Sunk segment",
-    hintPlacement: "Placement: RMB / scroll / R = rotate",
+    hintPlacement: "Placement: RMB / scroll / R / double tap = rotate",
     btnRotate: "Rotate manual (H/V)",
     btnAuto: "Random placement",
     btnClear: "Reset to manual",
@@ -469,6 +485,9 @@ const I18N: Record<Lang, Record<string, string>> = {
     chatGifs: "GIF reactions",
     chatMute: "Mute",
     chatUnmute: "Unmute",
+    chatOpen: "Open chat",
+    chatHide: "Hide chat",
+    chatMoveHint: "Drag to move between corners",
     chatYou: "You",
     chatOpponent: "Opponent",
     chatSystem: "System",
@@ -514,6 +533,50 @@ const getStoredChatMuted = (): boolean => {
 const storeChatMuted = (value: boolean) => {
   try {
     localStorage.setItem(CHAT_MUTED_KEY, value ? "1" : "0");
+  } catch {
+    // Ignore storage issues.
+  }
+};
+
+const getStoredChatCollapsed = (): boolean | null => {
+  try {
+    const value = localStorage.getItem(CHAT_COLLAPSED_KEY);
+    if (value === "1") return true;
+    if (value === "0") return false;
+  } catch {
+    // Ignore storage issues.
+  }
+  return null;
+};
+
+const storeChatCollapsed = (value: boolean) => {
+  try {
+    localStorage.setItem(CHAT_COLLAPSED_KEY, value ? "1" : "0");
+  } catch {
+    // Ignore storage issues.
+  }
+};
+
+const getStoredChatDock = (): ChatDockCorner | null => {
+  try {
+    const value = localStorage.getItem(CHAT_DOCK_KEY);
+    if (
+      value === "bottom-right" ||
+      value === "bottom-left" ||
+      value === "top-right" ||
+      value === "top-left"
+    ) {
+      return value;
+    }
+  } catch {
+    // Ignore storage issues.
+  }
+  return null;
+};
+
+const storeChatDock = (value: ChatDockCorner) => {
+  try {
+    localStorage.setItem(CHAT_DOCK_KEY, value);
   } catch {
     // Ignore storage issues.
   }
@@ -762,7 +825,7 @@ const isTypingContext = (element: Element | null): boolean => {
   return tagName === "input" || tagName === "textarea" || element.isContentEditable;
 };
 
-const rotatePlacementOrientation = (source: "button" | "PPM" | "scroll" | "R"): boolean => {
+const rotatePlacementOrientation = (source: "button" | "PPM" | "scroll" | "R" | "tap"): boolean => {
   if (!isManualPlacementActive()) return false;
   state.orientation = state.orientation === "H" ? "V" : "H";
   setStatus(`Orientacja: ${state.orientation} (${source}).`);
@@ -794,7 +857,50 @@ const storeReconnectToken = (value: string | null) => {
 reconnectToken = getStoredReconnectToken();
 language = getStoredLanguage();
 chatMuted = getStoredChatMuted();
+chatDock = getStoredChatDock() ?? "bottom-right";
+const initialChatCollapsed = getStoredChatCollapsed();
+chatCollapsed = initialChatCollapsed !== null ? initialChatCollapsed : window.matchMedia("(max-width: 860px)").matches;
 applyNicknameDefaultForLanguage(language);
+
+const applyChatDockClasses = () => {
+  const cornerClasses: ChatDockCorner[] = ["bottom-right", "bottom-left", "top-right", "top-left"];
+  const classNames = cornerClasses.map((corner) => `chat-corner-${corner}`);
+  chatPanelEl.classList.remove(...classNames);
+  chatLauncherEl.classList.remove(...classNames);
+  const selectedClass = `chat-corner-${chatDock}`;
+  chatPanelEl.classList.add(selectedClass);
+  chatLauncherEl.classList.add(selectedClass);
+};
+
+const setChatDock = (nextDock: ChatDockCorner, persist = true) => {
+  if (chatDock === nextDock) return;
+  chatDock = nextDock;
+  if (persist) {
+    storeChatDock(chatDock);
+  }
+  applyChatDockClasses();
+};
+
+const setChatCollapsed = (value: boolean, persist = true) => {
+  if (chatCollapsed === value) {
+    if (persist) {
+      storeChatCollapsed(chatCollapsed);
+    }
+    return;
+  }
+  chatCollapsed = value;
+  if (persist) {
+    storeChatCollapsed(chatCollapsed);
+  }
+};
+
+const toggleChatCollapsed = () => {
+  setChatCollapsed(!chatCollapsed);
+  if (!chatCollapsed) {
+    clearChatUnread();
+  }
+  render();
+};
 
 const applyStaticTranslations = () => {
   titleEl.textContent = t("title");
@@ -835,6 +941,8 @@ const applyStaticTranslations = () => {
   chatMuteBtnEl.textContent = chatMuted ? t("chatUnmute") : t("chatMute");
   chatMuteBtnEl.title = `${chatMuteBtnEl.textContent} - ${t("chatMuteHint")}`;
   chatMuteBtnEl.setAttribute("aria-label", chatMuteBtnEl.title);
+  chatLauncherEl.title = chatCollapsed ? t("chatOpen") : t("chatHide");
+  chatLauncherEl.setAttribute("aria-label", `${chatLauncherEl.title}. ${t("chatMoveHint")}`);
   chatEmojiButtons.forEach((button) => {
     button.title = `${t("chatEmoji")} ${button.dataset.chatEmoji ?? ""}`.trim();
     button.setAttribute("aria-label", button.title);
@@ -939,6 +1047,9 @@ const resetChatState = () => {
     unread: 0,
   };
   chatGifOpen = false;
+  if (window.matchMedia("(max-width: 860px)").matches) {
+    setChatCollapsed(true);
+  }
 };
 
 const chatMessageAuthor = (message: ChatMessage): string => {
@@ -959,7 +1070,23 @@ const chatMessageBody = (message: ChatMessage): string => {
   return message.text ?? "";
 };
 
-const chatGifSrc = (gifId: string): string => `/assets/chat-gifs/${gifId}.gif`;
+const CHAT_GIF_ASSET_VERSION = "4";
+const chatGifSrc = (gifId: string): string => `/assets/chat-gifs/${gifId}.gif?v=${CHAT_GIF_ASSET_VERSION}`;
+const refreshChatGifButtons = () => {
+  for (const button of chatGifButtons) {
+    const gifId = button.dataset.chatGif as (typeof CHAT_GIF_IDS)[number] | undefined;
+    if (!gifId) continue;
+    const image = button.querySelector("img");
+    if (!image) continue;
+    image.src = chatGifSrc(gifId);
+    image.onerror = () => {
+      button.classList.add("chat-gif--broken");
+    };
+    image.onload = () => {
+      button.classList.remove("chat-gif--broken");
+    };
+  }
+};
 const isChatNearBottom = (): boolean => {
   const distanceFromBottom = chatListEl.scrollHeight - (chatListEl.scrollTop + chatListEl.clientHeight);
   return distanceFromBottom <= 24;
@@ -1008,8 +1135,15 @@ const playChatPing = () => {
 
 const renderChat = () => {
   chatState.enabled = isChatEnabled();
+  refreshChatGifButtons();
   const previousScrollTop = chatListEl.scrollTop;
   const shouldStickToBottom = isChatNearBottom();
+  applyChatDockClasses();
+  chatPanelEl.classList.toggle("chat-panel--collapsed", chatCollapsed);
+  document.body.classList.toggle("chat-collapsed", chatCollapsed);
+  chatLauncherEl.title = chatCollapsed ? t("chatOpen") : t("chatHide");
+  chatLauncherEl.setAttribute("aria-label", `${chatLauncherEl.title}. ${t("chatMoveHint")}`);
+  chatLauncherEl.setAttribute("aria-expanded", chatCollapsed ? "false" : "true");
   chatPanelEl.classList.toggle("chat-panel--disabled", !chatState.enabled);
   chatInputEl.disabled = !chatState.enabled;
   chatGifToggleEl.disabled = !chatState.enabled;
@@ -1031,6 +1165,8 @@ const renderChat = () => {
   chatHintEl.textContent = chatState.enabled ? t("chatHintEnabled") : t("chatHintDisabled");
   chatUnreadEl.textContent = chatState.unread > 0 ? t("chatUnread", { count: chatState.unread }) : "";
   chatUnreadEl.classList.toggle("chat-panel__unread--active", chatState.unread > 0);
+  chatLauncherUnreadEl.textContent = chatState.unread > 0 ? String(chatState.unread) : "";
+  chatLauncherUnreadEl.classList.toggle("chat-launcher__unread--active", chatState.unread > 0);
   updateDocumentUnreadBadge();
   updateChatComposerState();
 
@@ -1058,6 +1194,9 @@ const renderChat = () => {
       img.className = "chat-message__gif";
       img.src = chatGifSrc(message.gifId);
       img.alt = chatMessageBody(message);
+      img.onerror = () => {
+        body.textContent = chatMessageBody(message);
+      };
       const caption = document.createElement("div");
       caption.className = "chat-message__gif-label";
       caption.textContent = chatMessageBody(message);
@@ -1284,6 +1423,14 @@ const updateControls = () => {
   }
 };
 
+const shouldAutoFocusShotInput = (): boolean => {
+  try {
+    return window.matchMedia("(pointer: fine) and (hover: hover) and (min-width: 981px)").matches;
+  } catch {
+    return false;
+  }
+};
+
 const render = () => {
   applyStaticTranslations();
   const manualPlacementActive = isManualPlacementActive();
@@ -1336,7 +1483,7 @@ const render = () => {
   updateControls();
   renderChat();
   const nowCanShoot = canShootEnemy();
-  if (nowCanShoot && !previousCanShoot) {
+  if (nowCanShoot && !previousCanShoot && shouldAutoFocusShotInput()) {
     shotInput.focus();
     shotInput.select();
   }
@@ -1946,6 +2093,68 @@ chatGifButtons.forEach((button) => {
   });
 });
 
+chatLauncherEl.addEventListener("click", () => {
+  if (chatLauncherDragged) {
+    chatLauncherDragged = false;
+    return;
+  }
+  toggleChatCollapsed();
+});
+
+chatLauncherEl.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  chatLauncherPointerId = event.pointerId;
+  chatLauncherDragging = true;
+  chatLauncherDragged = false;
+  chatLauncherDragStartX = event.clientX;
+  chatLauncherDragStartY = event.clientY;
+  chatLauncherEl.setPointerCapture(event.pointerId);
+});
+
+chatLauncherEl.addEventListener("pointermove", (event) => {
+  if (!chatLauncherDragging || chatLauncherPointerId !== event.pointerId) return;
+  const deltaX = Math.abs(event.clientX - chatLauncherDragStartX);
+  const deltaY = Math.abs(event.clientY - chatLauncherDragStartY);
+  if (!chatLauncherDragged && deltaX < 6 && deltaY < 6) return;
+  const { clientX, clientY } = event;
+  const style = chatLauncherEl.style;
+  style.left = `${clientX - 26}px`;
+  style.top = `${clientY - 26}px`;
+  style.right = "auto";
+  style.bottom = "auto";
+  chatLauncherEl.classList.add("chat-launcher--dragging");
+  if (!chatLauncherDragged) {
+    chatLauncherDragged = true;
+  }
+});
+
+const finalizeChatLauncherDrag = (event: PointerEvent) => {
+  if (chatLauncherPointerId !== event.pointerId) return;
+  chatLauncherDragging = false;
+  chatLauncherPointerId = null;
+  chatLauncherEl.classList.remove("chat-launcher--dragging");
+  chatLauncherEl.style.left = "";
+  chatLauncherEl.style.top = "";
+  chatLauncherEl.style.right = "";
+  chatLauncherEl.style.bottom = "";
+  if (!chatLauncherDragged) return;
+  const vertical = event.clientY < window.innerHeight / 2 ? "top" : "bottom";
+  const horizontal = event.clientX < window.innerWidth / 2 ? "left" : "right";
+  setChatDock(`${vertical}-${horizontal}` as ChatDockCorner);
+  render();
+};
+
+chatLauncherEl.addEventListener("pointerup", finalizeChatLauncherDrag);
+chatLauncherEl.addEventListener("pointercancel", () => {
+  chatLauncherDragging = false;
+  chatLauncherPointerId = null;
+  chatLauncherEl.classList.remove("chat-launcher--dragging");
+  chatLauncherEl.style.left = "";
+  chatLauncherEl.style.top = "";
+  chatLauncherEl.style.right = "";
+  chatLauncherEl.style.bottom = "";
+});
+
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     clearChatUnread();
@@ -1957,10 +2166,12 @@ window.addEventListener("focus", () => {
 });
 
 chatPanelEl.addEventListener("pointerenter", () => {
+  if (chatCollapsed) return;
   clearChatUnread();
 });
 
 chatPanelEl.addEventListener("focusin", () => {
+  if (chatCollapsed) return;
   clearChatUnread();
 });
 
@@ -1989,6 +2200,10 @@ document.addEventListener("keydown", (event) => {
   if (!chatState.enabled || document.hidden) return;
   if (isTypingContext(document.activeElement)) return;
   event.preventDefault();
+  if (chatCollapsed) {
+    setChatCollapsed(false);
+    render();
+  }
   chatInputEl.focus();
 });
 
@@ -2014,6 +2229,25 @@ boardOwnEl.addEventListener(
     if (!target.closest("button.cell")) return;
     event.preventDefault();
     rotatePlacementOrientation("scroll");
+  },
+  { passive: false },
+);
+
+boardOwnEl.addEventListener(
+  "touchstart",
+  (event) => {
+    if (!isManualPlacementActive()) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (!target.closest("button.cell")) return;
+    const now = Date.now();
+    const delta = now - boardTouchLastTapTs;
+    boardTouchLastTapTs = now;
+    if (delta > 0 && delta < 320) {
+      event.preventDefault();
+      boardTouchLastTapTs = 0;
+      rotatePlacementOrientation("tap");
+    }
   },
   { passive: false },
 );
