@@ -326,6 +326,7 @@ let chatLauncherDragging = false;
 let chatLauncherDragged = false;
 let chatLauncherDragStartX = 0;
 let chatLauncherDragStartY = 0;
+let chatInputComposing = false;
 let chatState: ChatState = {
   enabled: false,
   messages: [],
@@ -412,6 +413,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     gameActiveBadge: "Gra aktywna",
     gameOverBadge: "Gra zakończona",
     winnerTitle: "ZWYCIEZCA",
+    nicknameRequired: "Ustaw własny nickname przed rozpoczęciem gry online.",
     chatTitle: "Czat online",
     chatPlaceholder: "Napisz wiadomość...",
     chatShortcutHint: "Skróty: / fokus, Enter wysyła, Esc zamyka GIF, klik poza zamyka GIF.",
@@ -472,6 +474,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     gameActiveBadge: "Game active",
     gameOverBadge: "Game finished",
     winnerTitle: "WINNER",
+    nicknameRequired: "Set your own nickname before starting an online game.",
     chatTitle: "Online Chat",
     chatPlaceholder: "Type a message...",
     chatShortcutHint: "Shortcuts: / focuses chat, Enter sends, Esc closes GIF, click outside closes GIF.",
@@ -743,6 +746,21 @@ const getCurrentPlayerName = (): string => {
   return DEFAULT_NICK_BY_LANG[language];
 };
 
+const hasValidOnlineNickname = (): boolean => {
+  const nick = nickInput.value.trim();
+  if (nick.length === 0) return false;
+  if (nick === DEFAULT_NICK_BY_LANG.pl || nick === DEFAULT_NICK_BY_LANG.en) return false;
+  return true;
+};
+
+const requireOnlineNickname = (): boolean => {
+  if (hasValidOnlineNickname()) return true;
+  setStatus(t("nicknameRequired"));
+  nickInput.focus();
+  nickInput.select();
+  return false;
+};
+
 const clearWinnerFxTimer = () => {
   if (winnerFxTimer) {
     clearTimeout(winnerFxTimer);
@@ -896,7 +914,7 @@ const setChatCollapsed = (value: boolean, persist = true) => {
 
 const toggleChatCollapsed = () => {
   setChatCollapsed(!chatCollapsed);
-  if (!chatCollapsed) {
+  if (chatCollapsed) {
     clearChatUnread();
   }
   render();
@@ -1226,7 +1244,7 @@ const appendChatMessage = (message: ChatMessage) => {
     chatState.messages = chatState.messages.slice(-80);
   }
   const incomingFromOpponent = message.kind !== "system" && message.senderId !== yourId;
-  if (incomingFromOpponent && (document.hidden || !isChatNearBottom())) {
+  if (incomingFromOpponent && (document.hidden || chatCollapsed || !isChatNearBottom())) {
     chatState.unread += 1;
   }
   if (incomingFromOpponent && chatState.enabled && !document.hidden) {
@@ -1240,10 +1258,11 @@ const clearChatUnread = () => {
   render();
 };
 
-const emitChatSend = (payload: ChatSendPayload) => {
-  if (!socket || !chatState.enabled || !roomId) return;
+const emitChatSend = (payload: ChatSendPayload): boolean => {
+  if (!socket || !chatState.enabled || !roomId) return false;
   const outgoing: ChatSendPayload = { ...payload, roomId };
   socket.emit("chat:send", outgoing);
+  return true;
 };
 
 const drawBoard = (
@@ -1935,6 +1954,9 @@ const joinQueue = () => {
     setStatus(inQueue ? "Już czekasz na przeciwnika." : "Już jesteś online. Odśwież, aby zrestartować.");
     return;
   }
+  if (!requireOnlineNickname()) {
+    return;
+  }
   autoReconnectQueued = true;
   awaitingShot = false;
   clearReconnectCountdown();
@@ -2044,26 +2066,37 @@ shotInput.addEventListener("keydown", (event) => {
   fireFromInput();
 });
 
-chatSendBtnEl.addEventListener("click", () => {
+const trySendChatText = (): boolean => {
   const text = chatInputEl.value.trim();
-  if (!text) return;
-  emitChatSend({ kind: "text", text });
+  if (!text) return false;
+  const sent = emitChatSend({ kind: "text", text });
+  if (!sent) return false;
   chatInputEl.value = "";
   updateChatComposerState();
+  return true;
+};
+
+chatSendBtnEl.addEventListener("click", () => {
+  trySendChatText();
 });
 
 chatInputEl.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
+  if (event.isComposing || chatInputComposing) return;
   event.preventDefault();
-  const text = chatInputEl.value.trim();
-  if (!text) return;
-  emitChatSend({ kind: "text", text });
-  chatInputEl.value = "";
-  updateChatComposerState();
+  trySendChatText();
 });
 
 chatInputEl.addEventListener("input", () => {
   updateChatComposerState();
+});
+
+chatInputEl.addEventListener("compositionstart", () => {
+  chatInputComposing = true;
+});
+
+chatInputEl.addEventListener("compositionend", () => {
+  chatInputComposing = false;
 });
 
 chatGifToggleEl.addEventListener("click", () => {
