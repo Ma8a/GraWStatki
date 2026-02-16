@@ -6596,6 +6596,184 @@ test("chat:send is rate limited under burst", async () => {
   }
 });
 
+test("chat:send with URL is rejected with chat_invalid_payload", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    CHAT_BLOCK_LINKS: "true",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const error = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (payload) => payload?.code === "chat_invalid_payload",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "https://example.com/boom" });
+    const payload = await error;
+    assert.equal(payload.code, "chat_invalid_payload");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send with only control/format chars is rejected with chat_invalid_payload", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port);
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const error = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (payload) => payload?.code === "chat_invalid_payload",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "\u200b\u200d\u2060" });
+    const payload = await error;
+    assert.equal(payload.code, "chat_invalid_payload");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send cooldown blocks second message sent too quickly", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    CHAT_MIN_INTERVAL_MS: "1_200",
+    RATE_LIMIT_CHAT_PER_WINDOW: "20",
+    RATE_LIMIT_CHAT_WINDOW_MS: "2_000",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const firstDelivered = waitForEventFiltered(
+      socketA,
+      "chat:message",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.message?.kind === "text" &&
+        payload?.message?.text === "first-fast",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "first-fast" });
+    await firstDelivered;
+
+    const limited = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (payload) => payload?.code === "chat_rate_limited",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "second-fast" });
+    const payload = await limited;
+    assert.equal(payload.code, "chat_rate_limited");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send duplicate spam is rejected inside duplicate window", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    CHAT_MIN_INTERVAL_MS: "20",
+    CHAT_DUPLICATE_WINDOW_MS: "4_000",
+    CHAT_MAX_SIMILAR_IN_WINDOW: "2",
+    RATE_LIMIT_CHAT_PER_WINDOW: "20",
+    RATE_LIMIT_CHAT_WINDOW_MS: "2_000",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const text = "same-msg";
+    const firstTwo = waitForEvents(
+      socketA,
+      "chat:message",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.message?.kind === "text" &&
+        payload?.message?.text === text,
+      2,
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text });
+    await sleep(40);
+    socketA.emit("chat:send", { roomId, kind: "text", text });
+    await firstTwo;
+    await sleep(40);
+
+    const limited = waitForEventFiltered(
+      socketA,
+      "game:error",
+      (payload) => payload?.code === "chat_rate_limited",
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text });
+    const payload = await limited;
+    assert.equal(payload.code, "chat_rate_limited");
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
+test("chat:send accepts different text messages in normal pace", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    CHAT_MIN_INTERVAL_MS: "100",
+    CHAT_DUPLICATE_WINDOW_MS: "5_000",
+    CHAT_MAX_SIMILAR_IN_WINDOW: "2",
+    RATE_LIMIT_CHAT_PER_WINDOW: "20",
+    RATE_LIMIT_CHAT_WINDOW_MS: "2_000",
+  });
+  const socketA = createClient(port, { reconnection: false });
+  const socketB = createClient(port, { reconnection: false });
+
+  try {
+    const setup = await setupPlayingRoom(socketA, socketB, "Alpha", "Beta");
+    const roomId = setup.roomId;
+    const seen = waitForEvents(
+      socketA,
+      "chat:message",
+      (payload) =>
+        payload?.roomId === roomId &&
+        payload?.message?.kind === "text" &&
+        (payload?.message?.text === "alpha-one" || payload?.message?.text === "alpha-two"),
+      2,
+      4_000,
+    );
+    socketA.emit("chat:send", { roomId, kind: "text", text: "alpha-one" });
+    await sleep(160);
+    socketA.emit("chat:send", { roomId, kind: "text", text: "alpha-two" });
+    const payloads = await seen;
+    assert.equal(payloads.length, 2);
+  } finally {
+    socketA.disconnect();
+    socketB.disconnect();
+    await server.close();
+  }
+});
+
 test("chat history is replayed after reconnect", async () => {
   const port = randomPort();
   const server = await startTestServer(port, {

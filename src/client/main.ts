@@ -634,6 +634,12 @@ const translateStatus = (text: string): string => {
     "Za dużo prób reconnect. Spróbuj ponownie za chwilę.": "Too many reconnect attempts. Try again shortly.",
     "Za dużo żądań anulowania. Spróbuj ponownie za chwilę.": "Too many cancel requests. Try again shortly.",
     "Zbyt wiele błędnych żądań. Spróbuj ponownie za chwilę.": "Too many invalid requests. Try again shortly.",
+    "Za dużo wiadomości czatu. Spróbuj ponownie za chwilę.": "Too many chat messages. Try again shortly.",
+    "Wiadomość zawiera niedozwolony link.": "Links are blocked in chat messages.",
+    "Wiadomość zawiera niedozwolone znaki sterujące.": "Message contains forbidden control characters.",
+    "Wiadomość jest pusta po normalizacji.": "Message is empty after normalization.",
+    "Wysyłasz wiadomości zbyt szybko. Spróbuj ponownie za chwilę.": "You are sending messages too fast. Try again shortly.",
+    "Wiadomość jest zbyt podobna do poprzednich. Spróbuj ponownie za chwilę.": "Message is too similar to recent ones. Try again shortly.",
     "Błędny format. Użyj A1..J10.": "Invalid format. Use A1..J10.",
     "Czekaj na odpowiedź serwera.": "Wait for server response.",
     "Poczekaj na swoją kolej.": "Wait for your turn.",
@@ -2499,7 +2505,7 @@ if (socket) {
       payload.code === "chat_not_allowed" ||
       payload.code === "chat_room_mismatch"
     ) {
-      chatHintEl.textContent = payload?.message ?? t("chatHintDisabled");
+      chatHintEl.textContent = translateStatus(payload?.message ?? t("chatHintDisabled"));
       return;
     }
     if (payload.code === "reconnect_grace") {

@@ -231,6 +231,10 @@ Konfiguracja:
 - `RATE_LIMIT_SHOT_PER_WINDOW`, `RATE_LIMIT_SHOT_WINDOW_MS` — limity burst dla `game:shot`.
 - `RATE_LIMIT_PLACE_SHIPS_PER_WINDOW`, `RATE_LIMIT_PLACE_SHIPS_WINDOW_MS` — limity burst dla `game:place_ships`.
 - `RATE_LIMIT_JOIN_PER_WINDOW`, `RATE_LIMIT_RECONNECT_JOIN_PER_WINDOW`, `RATE_LIMIT_JOIN_WINDOW_MS`, `RATE_LIMIT_GAME_CANCEL_PER_WINDOW`, `RATE_LIMIT_SEARCH_CANCEL_PER_WINDOW` — limity dla kolejki/anulowania/reconnect.
+- `RATE_LIMIT_CHAT_PER_WINDOW`, `RATE_LIMIT_CHAT_WINDOW_MS` — bazowy limiter burst dla `chat:send`.
+- `CHAT_MIN_INTERVAL_MS` — minimalny odstęp między kolejnymi wiadomościami tego samego gracza (cooldown anty-spam).
+- `CHAT_DUPLICATE_WINDOW_MS`, `CHAT_MAX_SIMILAR_IN_WINDOW` — okno i próg blokady powtarzających się wiadomości.
+- `CHAT_BLOCK_LINKS` — blokada linków (`http://`, `https://`, `www.`) w wiadomościach czatu.
 - `MATCH_TIMEOUT_MS` — timeout oczekiwania w kolejce (domyślnie `60000`).
 - `ROOM_INACTIVITY_TIMEOUT_MS` — timeout braku aktywności pokoju (domyślnie `600000`).
 - `INVALID_INPUT_LIMIT_PER_WINDOW`, `INVALID_INPUT_WINDOW_MS`, `INVALID_INPUT_BAN_MS` — miękki ban dla floodu niepoprawnych payloadów.
@@ -250,6 +254,14 @@ Konfiguracja:
 - `MATCH_EVENTS_RETENTION_DAYS`, `SECURITY_EVENTS_RETENTION_DAYS`, `MATCHES_RETENTION_DAYS` — retencja danych telemetry/audytu.
 - `DB_RETENTION_DRY_RUN` — jeśli `true`, `npm run db:retention` tylko raportuje liczbę rekordów do usunięcia.
 - Oba timeouty akceptują też zapis z separatorem `_` (np. `10_000`).
+
+### Chat security defaults (core hardening)
+- Czat PvP działa z walidacją payloadu, whitelistą `emoji/gif`, limiterem burst i soft-banem dla floodu błędnych danych.
+- Wiadomości tekstowe przechodzą normalizację Unicode (`NFKC`) i czyszczenie znaków sterujących/formatujących po stronie serwera.
+- Treści zawierające URL są domyślnie blokowane (`CHAT_BLOCK_LINKS=true`).
+- Dodatkowo działa anty-spam „balanced”:
+  - cooldown między wiadomościami (`CHAT_MIN_INTERVAL_MS=700`),
+  - blokada zbyt podobnych wiadomości w krótkim oknie (`CHAT_DUPLICATE_WINDOW_MS=8000`, `CHAT_MAX_SIMILAR_IN_WINDOW=2`).
 
 `game:over` zwraca teraz opcjonalnie:
 - `reason: "normal" | "disconnect" | "manual_cancel" | "inactivity_timeout"`,

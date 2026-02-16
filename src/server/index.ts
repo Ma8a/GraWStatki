@@ -175,6 +175,10 @@ const RATE_LIMITS = {
 const CHAT_HISTORY_MAX = parseTimeoutMs(process.env.CHAT_HISTORY_MAX, 80);
 const CHAT_REPLAY_MAX = parseTimeoutMs(process.env.CHAT_REPLAY_MAX, 50);
 const POST_GAME_CHAT_TTL_MS = parseTimeoutMs(process.env.POST_GAME_CHAT_TTL_MS, 60_000);
+const CHAT_MIN_INTERVAL_MS = parseTimeoutMs(process.env.CHAT_MIN_INTERVAL_MS, 700);
+const CHAT_DUPLICATE_WINDOW_MS = parseTimeoutMs(process.env.CHAT_DUPLICATE_WINDOW_MS, 8_000);
+const CHAT_MAX_SIMILAR_IN_WINDOW = parseTimeoutMs(process.env.CHAT_MAX_SIMILAR_IN_WINDOW, 2);
+const CHAT_BLOCK_LINKS = !/^(0|false|no)$/i.test(process.env.CHAT_BLOCK_LINKS ?? "true");
 const INVALID_INPUT_LIMIT = parseTimeoutMs(process.env.INVALID_INPUT_LIMIT_PER_WINDOW, 12);
 const INVALID_INPUT_WINDOW_MS = parseTimeoutMs(process.env.INVALID_INPUT_WINDOW_MS, 10_000);
 const INVALID_INPUT_BAN_MS = parseTimeoutMs(process.env.INVALID_INPUT_BAN_MS, 30_000);
@@ -189,9 +193,17 @@ type InvalidInputState = {
   bannedUntil: number;
   lastSeen: number;
 };
+type ChatAntiSpamState = {
+  lastSentAt: number;
+  recentFingerprints: Array<{ fingerprint: string; at: number }>;
+  lastSeen: number;
+};
 const actionRate = new Map<string, RateState>();
 const invalidInputRate = new Map<string, InvalidInputState>();
+const chatAntiSpamState = new Map<string, ChatAntiSpamState>();
 let lastPresenceRefreshTs = 0;
+const CHAT_LINK_REGEX = /\b(?:https?:\/\/|www\.)\S+/i;
+const CHAT_UNSAFE_TEXT_REGEX = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]|\p{Cf}/gu;
 const makeRateBucketKey = (identity: string, action: string) => `${identity}::${action}`;
 const isRateLimited = (identity: string, action: string, max: number, windowMs: number): boolean => {
   const now = Date.now();
@@ -323,6 +335,73 @@ const cleanupInvalidInputState = (now = Date.now()): void => {
     }
   }
 };
+const makeChatAntiSpamKey = (roomId: string, senderId: string): string => `${roomId}::${senderId}`;
+const getChatAntiSpamState = (key: string, now: number): ChatAntiSpamState => {
+  const existing = chatAntiSpamState.get(key);
+  if (existing) {
+    existing.lastSeen = now;
+    return existing;
+  }
+  const created: ChatAntiSpamState = {
+    lastSentAt: 0,
+    recentFingerprints: [],
+    lastSeen: now,
+  };
+  chatAntiSpamState.set(key, created);
+  return created;
+};
+const pruneChatFingerprints = (state: ChatAntiSpamState, now: number): void => {
+  state.recentFingerprints = state.recentFingerprints.filter((entry) => now - entry.at <= CHAT_DUPLICATE_WINDOW_MS);
+};
+const consumeChatAntiSpam = (
+  roomId: string,
+  senderId: string,
+  fingerprint: string,
+  now: number,
+): "cooldown" | "duplicate" | null => {
+  const key = makeChatAntiSpamKey(roomId, senderId);
+  const state = getChatAntiSpamState(key, now);
+  if (state.lastSentAt > 0 && now - state.lastSentAt < CHAT_MIN_INTERVAL_MS) {
+    return "cooldown";
+  }
+  pruneChatFingerprints(state, now);
+  const similarCount = state.recentFingerprints.filter((entry) => entry.fingerprint === fingerprint).length;
+  if (similarCount >= CHAT_MAX_SIMILAR_IN_WINDOW) {
+    return "duplicate";
+  }
+  state.lastSentAt = now;
+  state.lastSeen = now;
+  state.recentFingerprints.push({ fingerprint, at: now });
+  return null;
+};
+const cleanupChatAntiSpamState = (now = Date.now()): void => {
+  const ttlMs = Math.max(CHAT_DUPLICATE_WINDOW_MS, CHAT_MIN_INTERVAL_MS) * 6;
+  for (const [key, state] of chatAntiSpamState.entries()) {
+    pruneChatFingerprints(state, now);
+    if (now - state.lastSeen > ttlMs && now - state.lastSentAt > ttlMs) {
+      chatAntiSpamState.delete(key);
+    }
+  }
+};
+const clearChatAntiSpamForRoom = (roomId: string): void => {
+  const prefix = `${roomId}::`;
+  for (const key of chatAntiSpamState.keys()) {
+    if (key.startsWith(prefix)) {
+      chatAntiSpamState.delete(key);
+    }
+  }
+};
+const normalizeChatText = (text: string): { cleaned: string; fingerprint: string; hadUnsafeChars: boolean } => {
+  const normalized = text.normalize("NFKC").trim();
+  const cleaned = normalized.replace(CHAT_UNSAFE_TEXT_REGEX, "");
+  const fingerprint = cleaned.replace(/\s+/g, " ").trim().toLowerCase();
+  return {
+    cleaned,
+    fingerprint,
+    hadUnsafeChars: cleaned !== normalized,
+  };
+};
+const hasBlockedChatLink = (text: string): boolean => CHAT_LINK_REGEX.test(text);
 const normalizeIp = (value: string | undefined): string => {
   if (!value) return "";
   const trimmed = value.trim();
@@ -1239,6 +1318,7 @@ const removeRoom = (room: GameRoom) => {
     playerRooms.delete(playerId);
     clearRateState(playerId);
   }
+  clearChatAntiSpamForRoom(room.roomId);
   rooms.delete(room.roomId);
   if (runtimeServices.redisState.isEnabled) {
     void runtimeServices.redisState.deleteRoomSnapshot(room.roomId);
@@ -1912,15 +1992,88 @@ const onChatSend = async (socket: Socket, payload: ChatSendPayload) => {
     return;
   }
 
+  const now = Date.now();
+  let normalizedText: string | undefined;
+  let antiSpamFingerprint: string = payload.kind;
+  if (payload.kind === "text") {
+    const textPayload = payload.text ?? "";
+    const { cleaned, fingerprint, hadUnsafeChars } = normalizeChatText(textPayload);
+    if (cleaned.length === 0) {
+      noteInvalidInput(socket);
+      if (hadUnsafeChars) {
+        recordSecurityEvent("chat_rejected_control_chars", {
+          roomId: room.roomId,
+          senderId: socket.id,
+          at: now,
+        });
+      }
+      socket.emit("game:error", {
+        code: "chat_invalid_payload",
+        message: hadUnsafeChars
+          ? "Wiadomość zawiera niedozwolone znaki sterujące."
+          : "Wiadomość jest pusta po normalizacji.",
+      });
+      return;
+    }
+    if (CHAT_BLOCK_LINKS && hasBlockedChatLink(cleaned)) {
+      noteInvalidInput(socket);
+      recordSecurityEvent("chat_rejected_link", {
+        roomId: room.roomId,
+        senderId: socket.id,
+        at: now,
+      });
+      socket.emit("game:error", {
+        code: "chat_invalid_payload",
+        message: "Wiadomość zawiera niedozwolony link.",
+      });
+      return;
+    }
+    normalizedText = cleaned;
+    antiSpamFingerprint = `text:${fingerprint || cleaned.toLowerCase()}`;
+  } else if (payload.kind === "emoji") {
+    antiSpamFingerprint = `emoji:${payload.emoji ?? ""}`;
+  } else if (payload.kind === "gif") {
+    antiSpamFingerprint = `gif:${payload.gifId ?? ""}`;
+  }
+
+  const spamReason = consumeChatAntiSpam(room.roomId, socket.id, antiSpamFingerprint, now);
+  if (spamReason === "cooldown") {
+    recordSecurityEvent("chat_rejected_cooldown", {
+      roomId: room.roomId,
+      senderId: socket.id,
+      at: now,
+      minIntervalMs: CHAT_MIN_INTERVAL_MS,
+    });
+    socket.emit("game:error", {
+      code: "chat_rate_limited",
+      message: "Wysyłasz wiadomości zbyt szybko. Spróbuj ponownie za chwilę.",
+    });
+    return;
+  }
+  if (spamReason === "duplicate") {
+    recordSecurityEvent("chat_rejected_duplicate", {
+      roomId: room.roomId,
+      senderId: socket.id,
+      at: now,
+      windowMs: CHAT_DUPLICATE_WINDOW_MS,
+      maxSimilar: CHAT_MAX_SIMILAR_IN_WINDOW,
+    });
+    socket.emit("game:error", {
+      code: "chat_rate_limited",
+      message: "Wiadomość jest zbyt podobna do poprzednich. Spróbuj ponownie za chwilę.",
+    });
+    return;
+  }
+
   const message: ChatMessage = {
     id: `chat-${++room.chatSeq}-${randomBytes(4).toString("hex")}`,
     roomId: room.roomId,
     senderId: socket.id,
     senderName: room.nicknames[socket.id] ?? "Gracz",
     kind: payload.kind,
-    createdAt: Date.now(),
+    createdAt: now,
   };
-  if (payload.kind === "text") message.text = payload.text;
+  if (payload.kind === "text") message.text = normalizedText;
   if (payload.kind === "emoji") message.emoji = payload.emoji;
   if (payload.kind === "gif") message.gifId = payload.gifId;
 
@@ -2197,6 +2350,7 @@ const maintenanceTimer = setInterval(() => {
   cleanupExpiredTokens();
   cleanupRateState();
   cleanupInvalidInputState();
+  cleanupChatAntiSpamState();
   cleanupOverRooms();
   cleanupInactiveRooms();
   cleanupDisconnectedPlayers();
