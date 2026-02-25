@@ -40,7 +40,6 @@ const NOOP: RuntimeRedisQueue = {
 
 const safeLog = (scope: string, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  // eslint-disable-next-line no-console
   console.warn(`[redis-queue] ${scope} failed: ${message}`);
 };
 

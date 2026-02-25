@@ -6,7 +6,6 @@ import {
   REQUIRED_FLEET,
   Ship,
   ShipType,
-  ShotOutcome,
   ShotResult,
   SerializedBoard,
   STANDARD_FLEET,

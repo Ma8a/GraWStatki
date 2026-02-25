@@ -17,7 +17,6 @@ const NOOP: RuntimeRedisLimiter = {
 
 const safeLog = (scope: string, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  // eslint-disable-next-line no-console
   console.warn(`[redis] ${scope} failed: ${message}`);
 };
 

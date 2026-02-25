@@ -155,7 +155,6 @@ const resolveCorsConfig = () => {
 
 const corsConfig = resolveCorsConfig();
 if (process.env.NODE_ENV === "production" && !corsConfig.allowAll && corsConfig.allowedOrigins.length === 0) {
-  // eslint-disable-next-line no-console
   console.warn("[security] CORS_ORIGINS is empty in production; socket handshakes will be rejected.");
 }
 
@@ -203,7 +202,7 @@ const invalidInputRate = new Map<string, InvalidInputState>();
 const chatAntiSpamState = new Map<string, ChatAntiSpamState>();
 let lastPresenceRefreshTs = 0;
 const CHAT_LINK_REGEX = /\b(?:https?:\/\/|www\.)\S+/i;
-const CHAT_UNSAFE_TEXT_REGEX = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]|\p{Cf}/gu;
+const CHAT_UNSAFE_TEXT_REGEX = /[\p{Cc}\p{Cf}]/gu;
 const makeRateBucketKey = (identity: string, action: string) => `${identity}::${action}`;
 const isRateLimited = (identity: string, action: string, max: number, windowMs: number): boolean => {
   const now = Date.now();
@@ -521,7 +520,7 @@ const deleteQueueEntry = (playerId: string, reconnectToken?: string): void => {
   void runtimeServices.redisQueue.removeQueueEntry(playerId, reconnectToken);
 };
 
-const persistParkedQueueEntry = (entry: QueueEntry): void => {
+const _persistParkedQueueEntry = (entry: QueueEntry): void => {
   if (!runtimeServices.redisQueue.isEnabled) return;
   void runtimeServices.redisQueue.upsertParkedEntry(entry, QUEUE_PARKED_TTL_MS);
 };
@@ -649,7 +648,6 @@ const io = new Server(httpServer, {
     if (process.env.NODE_ENV !== "test") {
       const safeOrigin = typeof origin === "string" ? origin.slice(0, 128) : "unknown";
       const remote = req.socket.remoteAddress ?? "unknown";
-      // eslint-disable-next-line no-console
       console.warn(`[security] rejected socket origin origin=${safeOrigin} remote=${remote}`);
       recordSecurityEvent("socket_origin_rejected", {
         origin: safeOrigin,
@@ -2357,7 +2355,6 @@ const maintenanceTimer = setInterval(() => {
 }, MAINTENANCE_INTERVAL_MS);
 
 const serverInstance = httpServer.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`Server listening on http://localhost:${PORT}`);
 });
 
@@ -2365,7 +2362,6 @@ let shutdownRequested = false;
 const shutdown = async (signal: string) => {
   if (shutdownRequested) return;
   shutdownRequested = true;
-  // eslint-disable-next-line no-console
   console.log(`Shutting down (${signal})...`);
   clearInterval(maintenanceTimer);
   if (runtimeServices.redisState.isEnabled) {

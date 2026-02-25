@@ -9,36 +9,7 @@ const $ = (selector) => {
 };
 const coordKey = (coord) => `${coord.row},${coord.col}`;
 const coordLabel = (coord) => `${labels[coord.col]}${coord.row + 1}`;
-const SHIP_ICON = "⚓";
-const HIT_ICON = "💥";
-const MISS_ICON = "·";
-const SINK_ICON = "🛳️";
-const FALLBACK_SHIP_ICON = "S";
-const FALLBACK_HIT_ICON = "X";
-const FALLBACK_MISS_ICON = ".";
-const FALLBACK_SINK_ICON = "#";
-const cellIcon = (state, useFallback = false) => {
-    if (useFallback) {
-        if (state === "ship")
-            return FALLBACK_SHIP_ICON;
-        if (state === "sunk")
-            return FALLBACK_SINK_ICON;
-        if (state === "hit")
-            return FALLBACK_HIT_ICON;
-        if (state === "miss")
-            return FALLBACK_MISS_ICON;
-        return "";
-    }
-    if (state === "ship")
-        return SHIP_ICON;
-    if (state === "sunk")
-        return SINK_ICON;
-    if (state === "hit")
-        return HIT_ICON;
-    if (state === "miss")
-        return MISS_ICON;
-    return "";
-};
+const cellIcon = (_state) => "";
 const cellDescription = (coord, state) => {
     const cell = coordLabel(coord);
     if (language === "en") {
@@ -70,21 +41,6 @@ const cellDescription = (coord, state) => {
         return `${cell}: podgląd ustawienia (błędne)`;
     return `${cell}: puste`;
 };
-const useFallbackIcons = typeof document === "undefined"
-    ? false
-    : (() => {
-        try {
-            if (document.fonts && document.fonts.check) {
-                const fallbackFont = document.fonts.check('16px "Apple Color Emoji"');
-                const windowsFont = document.fonts.check('16px "Segoe UI Emoji"');
-                return !fallbackFont && !windowsFont;
-            }
-            return false;
-        }
-        catch {
-            return false;
-        }
-    })();
 const coordEquals = (a, b) => a.row === b.row && a.col === b.col;
 const markAroundSunkShip = (board, hits) => {
     for (const hit of hits) {
@@ -158,7 +114,11 @@ const syncSunkCellsFromBoard = (board, target) => {
         }
     }
 };
+const appEl = $(".app");
 const statusEl = $("#status");
+const objectiveLabelEl = $("#objectiveLabel");
+const objectiveTextEl = $("#objectiveText");
+const boardHelperTextEl = $("#boardHelperText");
 const shotsYourEl = $("#shotsYour");
 const shotsOpponentEl = $("#shotsOpponent");
 const shotsTotalEl = $("#shotsTotal");
@@ -213,6 +173,8 @@ const btnStartLocal = $("#btnStartLocal");
 const btnJoinQueue = $("#btnJoinQueue");
 const btnPlayAgainOnline = $("#btnPlayAgainOnline");
 const btnCancel = $("#btnCancel");
+const btnAdvancedToggle = $("#btnAdvancedToggle");
+const advancedPanelEl = $("#advancedPanel");
 const shotInput = $("#shotInput");
 const btnFire = $("#btnFire");
 const nickInput = $("#nicknameInput");
@@ -247,6 +209,7 @@ const LANGUAGE_KEY = "battleship_language";
 const CHAT_MUTED_KEY = "battleship_chat_muted";
 const CHAT_COLLAPSED_KEY = "battleship_chat_collapsed";
 const CHAT_DOCK_KEY = "battleship_chat_dock";
+const ADVANCED_PANEL_KEY = "battleship_advanced_panel_open";
 const RECONNECT_GRACE_MS_FALLBACK = 3000;
 let language = "pl";
 let statusRaw = "";
@@ -261,6 +224,7 @@ let chatLauncherDragged = false;
 let chatLauncherDragStartX = 0;
 let chatLauncherDragStartY = 0;
 let chatInputComposing = false;
+let advancedPanelOpen = false;
 let chatState = {
     enabled: false,
     messages: [],
@@ -289,11 +253,11 @@ const resetShotInputState = (clearValue = false) => {
 };
 let state = {
     phase: "setup",
-    placement: "random",
+    placement: "manual",
     remainingShips: [...STANDARD_FLEET],
     orientation: "H",
-    yourBoard: placeFleetRandomly(createEmptyBoard()),
-    enemyBoard: placeFleetRandomly(createEmptyBoard()),
+    yourBoard: createEmptyBoard(),
+    enemyBoard: createEmptyBoard(),
     turn: "you",
     yourTurn: true,
     shots: 0,
@@ -308,6 +272,18 @@ const I18N = {
     pl: {
         title: "GRA W STATKI",
         subtitle: "Tryb taktyczny: ręczne ustawianie i walka online",
+        objectiveLabel: "Cel taktyczny",
+        objectiveSetup: "Ustaw flotę i przygotuj konfigurację ataku.",
+        objectiveSetupReadyWait: "Czekaj na gotowość przeciwnika i monitoruj łącze.",
+        objectivePlayingYourTurn: "Twoja tura: wybierz precyzyjny cel i oddaj strzał.",
+        objectivePlayingOpponentTurn: "Trzymaj pozycję. Oczekiwanie na ruch przeciwnika.",
+        objectiveOverLocal: "Misja zakończona. Uruchom nową grę PvA.",
+        objectiveOverOnline: "Mecz zakończony. Rozpocznij nową grę online.",
+        boardHelperSetup: "Ustawiaj statki na swojej planszy i kontroluj orientację.",
+        boardHelperSetupReadyWait: "Flota gotowa. Czekaj na sygnał startowy przeciwnika.",
+        boardHelperPlayingYourTurn: "Twoja plansza pokazuje uszkodzenia, prawa plansza to strefa ataku.",
+        boardHelperPlayingOpponentTurn: "Obserwuj raport trafień i przygotuj następny cel.",
+        boardHelperOver: "Bitwa zakończona. Sprawdź statystyki i wybierz kolejny tryb.",
         labelNickname: "Nickname:",
         labelShot: "Strzał (A1-J10):",
         labelLanguage: "Język:",
@@ -318,10 +294,10 @@ const I18N = {
         labelEnemyName: "Przeciwnik:",
         myBoard: "Moja plansza",
         enemyBoard: "Plansza przeciwnika",
-        legendShip: "⚓ Twój statek",
-        legendHit: "💥 Trafienie",
-        legendMiss: "· Pudło",
-        legendSunk: "🛳️ Zatopiony segment",
+        legendShip: "Twój statek",
+        legendHit: "Trafienie",
+        legendMiss: "Pudło",
+        legendSunk: "Zatopiony segment",
         hintPlacement: "Ustawianie: PPM / scroll / R / podwójny tap = obrót",
         btnRotate: "Obróć ręczny (H/V)",
         btnAuto: "Losowe rozstawienie",
@@ -330,6 +306,8 @@ const I18N = {
         btnPlayAgainOnline: "Nowa gra online",
         btnCancel: "Anuluj/wyjdź",
         btnFire: "Oddaj strzał",
+        btnAdvancedShow: "Zaawansowane",
+        btnAdvancedHide: "Ukryj zaawansowane",
         btnStartPva: "Start PvA",
         btnReadyWaiting: "Gotowy - czekam",
         btnReadySubmit: "Gotowe (wyślij ustawienie)",
@@ -369,6 +347,18 @@ const I18N = {
     en: {
         title: "BATTLESHIP",
         subtitle: "Tactical mode: manual placement and online battle",
+        objectiveLabel: "Tactical objective",
+        objectiveSetup: "Position the fleet and prepare your attack layout.",
+        objectiveSetupReadyWait: "Hold readiness. Waiting for opponent confirmation.",
+        objectivePlayingYourTurn: "Your turn: pick a precise target and fire.",
+        objectivePlayingOpponentTurn: "Hold position. Waiting for opponent move.",
+        objectiveOverLocal: "Mission complete. Launch a new local PvA game.",
+        objectiveOverOnline: "Match complete. Queue a new online mission.",
+        boardHelperSetup: "Place ships on your board and control orientation.",
+        boardHelperSetupReadyWait: "Fleet locked in. Waiting for opponent start signal.",
+        boardHelperPlayingYourTurn: "Your board tracks damage, enemy board is your strike zone.",
+        boardHelperPlayingOpponentTurn: "Track hit reports and prepare your next target.",
+        boardHelperOver: "Battle complete. Review metrics and pick next mode.",
         labelNickname: "Nickname:",
         labelShot: "Shot (A1-J10):",
         labelLanguage: "Language:",
@@ -379,10 +369,10 @@ const I18N = {
         labelEnemyName: "Opponent:",
         myBoard: "My Board",
         enemyBoard: "Enemy Board",
-        legendShip: "⚓ Your ship",
-        legendHit: "💥 Hit",
-        legendMiss: "· Miss",
-        legendSunk: "🛳️ Sunk segment",
+        legendShip: "Your ship",
+        legendHit: "Hit",
+        legendMiss: "Miss",
+        legendSunk: "Sunk segment",
         hintPlacement: "Placement: RMB / scroll / R / double tap = rotate",
         btnRotate: "Rotate manual (H/V)",
         btnAuto: "Random placement",
@@ -391,6 +381,8 @@ const I18N = {
         btnPlayAgainOnline: "New online game",
         btnCancel: "Cancel/leave",
         btnFire: "Fire shot",
+        btnAdvancedShow: "Advanced",
+        btnAdvancedHide: "Hide advanced",
         btnStartPva: "Start PvA",
         btnReadyWaiting: "Ready - waiting",
         btnReadySubmit: "Ready (send placement)",
@@ -509,6 +501,22 @@ const getStoredChatDock = () => {
 const storeChatDock = (value) => {
     try {
         localStorage.setItem(CHAT_DOCK_KEY, value);
+    }
+    catch {
+        // Ignore storage issues.
+    }
+};
+const getStoredAdvancedPanelOpen = () => {
+    try {
+        return localStorage.getItem(ADVANCED_PANEL_KEY) === "1";
+    }
+    catch {
+        return false;
+    }
+};
+const storeAdvancedPanelOpen = (value) => {
+    try {
+        localStorage.setItem(ADVANCED_PANEL_KEY, value ? "1" : "0");
     }
     catch {
         // Ignore storage issues.
@@ -782,6 +790,7 @@ reconnectToken = getStoredReconnectToken();
 language = getStoredLanguage();
 chatMuted = getStoredChatMuted();
 chatDock = getStoredChatDock() ?? "bottom-right";
+advancedPanelOpen = getStoredAdvancedPanelOpen();
 const initialChatCollapsed = getStoredChatCollapsed();
 chatCollapsed = initialChatCollapsed !== null ? initialChatCollapsed : window.matchMedia("(max-width: 860px)").matches;
 applyNicknameDefaultForLanguage(language);
@@ -822,9 +831,26 @@ const toggleChatCollapsed = () => {
     }
     render();
 };
+const setAdvancedPanelOpen = (value, persist = true) => {
+    if (advancedPanelOpen === value) {
+        if (persist) {
+            storeAdvancedPanelOpen(advancedPanelOpen);
+        }
+        return;
+    }
+    advancedPanelOpen = value;
+    if (persist) {
+        storeAdvancedPanelOpen(advancedPanelOpen);
+    }
+};
+const toggleAdvancedPanel = () => {
+    setAdvancedPanelOpen(!advancedPanelOpen);
+    render();
+};
 const applyStaticTranslations = () => {
     titleEl.textContent = t("title");
     subtitleEl.textContent = t("subtitle");
+    objectiveLabelEl.textContent = t("objectiveLabel");
     labelNicknameEl.textContent = t("labelNickname");
     labelShotEl.textContent = t("labelShot");
     labelLanguageEl.textContent = t("labelLanguage");
@@ -847,6 +873,8 @@ const applyStaticTranslations = () => {
     btnPlayAgainOnline.textContent = t("btnPlayAgainOnline");
     btnCancel.textContent = t("btnCancel");
     btnFire.textContent = t("btnFire");
+    btnAdvancedToggle.textContent = advancedPanelOpen ? t("btnAdvancedHide") : t("btnAdvancedShow");
+    btnAdvancedToggle.setAttribute("aria-expanded", advancedPanelOpen ? "true" : "false");
     chatTitleEl.textContent = t("chatTitle");
     chatPanelEl.setAttribute("aria-label", t("chatTitle"));
     chatInputEl.placeholder = t("chatPlaceholder");
@@ -1227,7 +1255,7 @@ const drawBoard = (container, board, revealShips, onCell, onHover = null, previe
             cell.dataset.row = String(row);
             cell.dataset.col = String(col);
             cell.setAttribute("aria-label", cellDescription(coord, cellState));
-            cell.textContent = cellIcon(cellState, useFallbackIcons);
+            cell.textContent = cellIcon(cellState);
             if (onCell) {
                 cell.addEventListener("click", () => onCell(coord));
             }
@@ -1245,6 +1273,42 @@ const updateRemaining = () => {
         state.placement === "manual"
             ? t("remaining", { ships: state.remainingShips.join(", ") })
             : t("randomMode");
+};
+const getObjectiveText = () => {
+    if (state.phase === "setup") {
+        if (online && onlineReady)
+            return t("objectiveSetupReadyWait");
+        return t("objectiveSetup");
+    }
+    if (state.phase === "playing") {
+        return canShootEnemy() ? t("objectivePlayingYourTurn") : t("objectivePlayingOpponentTurn");
+    }
+    return online ? t("objectiveOverOnline") : t("objectiveOverLocal");
+};
+const getBoardHelperText = () => {
+    if (state.phase === "setup") {
+        if (online && onlineReady)
+            return t("boardHelperSetupReadyWait");
+        return t("boardHelperSetup");
+    }
+    if (state.phase === "playing") {
+        return canShootEnemy() ? t("boardHelperPlayingYourTurn") : t("boardHelperPlayingOpponentTurn");
+    }
+    return t("boardHelperOver");
+};
+const updateTacticalNarrative = () => {
+    objectiveTextEl.textContent = getObjectiveText();
+    boardHelperTextEl.textContent = getBoardHelperText();
+};
+const updateAppDataHooks = () => {
+    appEl.dataset.mode = online ? "online" : "local";
+    appEl.dataset.phase = state.phase;
+    appEl.dataset.turn = canShootEnemy() ? "you" : "opponent";
+};
+const updateAdvancedPanel = () => {
+    advancedPanelEl.hidden = !advancedPanelOpen;
+    btnAdvancedToggle.setAttribute("aria-expanded", advancedPanelOpen ? "true" : "false");
+    appEl.dataset.advanced = advancedPanelOpen ? "open" : "closed";
 };
 const updateReadinessBadge = () => {
     if (!online) {
@@ -1370,6 +1434,9 @@ const render = () => {
     opponentNameEl.textContent = online ? opponentName : "AI";
     updateRemaining();
     updateControls();
+    updateAdvancedPanel();
+    updateTacticalNarrative();
+    updateAppDataHooks();
     renderChat();
     const nowCanShoot = canShootEnemy();
     if (nowCanShoot && !previousCanShoot && shouldAutoFocusShotInput()) {
@@ -1871,6 +1938,9 @@ btnAutoPlace.addEventListener("click", () => {
 });
 btnClearPlacement.addEventListener("click", () => {
     resetLocalSetup();
+});
+btnAdvancedToggle.addEventListener("click", () => {
+    toggleAdvancedPanel();
 });
 btnJoinQueue.addEventListener("click", () => {
     joinQueue();
@@ -2478,8 +2548,8 @@ const init = () => {
         placement: "manual",
         remainingShips: [...STANDARD_FLEET],
         orientation: "H",
-        yourBoard: placeFleetRandomly(createEmptyBoard()),
-        enemyBoard: placeFleetRandomly(createEmptyBoard()),
+        yourBoard: createEmptyBoard(),
+        enemyBoard: createEmptyBoard(),
         turn: "you",
         yourTurn: true,
         shots: 0,
