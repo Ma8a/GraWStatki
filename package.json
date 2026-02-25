@@ -12,6 +12,7 @@
     "test:core": "npm run build && node --test --test-concurrency=1 tests/health.test.js tests/shared-logic.test.js tests/matchmaking.test.js",
     "test:socketflow": "npm run build && node --test --test-concurrency=1 tests/socketflow.test.js",
     "test:db-retention": "node --test --test-concurrency=1 tests/db-retention.test.js",
+    "test:ui:smoke": "playwright test tests/ui-smoke.spec.js --reporter=line",
     "test:all": "npm run test:core && npm run test:socketflow && npm run test:db-retention",
     "ci:local": "npm run db:init && npm run lint && npm run test:core && npm run test:socketflow && npm run test:db-retention && npm run security",
     "test:socket-cors": "npm run build && node --test --test-concurrency=1 --test-name-pattern \"^socket\" tests/socketflow.test.js",
@@ -37,11 +38,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
-    "@typescript-eslint/eslint-plugin": "^8.24.0",
-    "@typescript-eslint/parser": "^8.24.0",
+    "@playwright/test": "^1.58.2",
     "@types/express": "^5.0.0",
     "@types/node": "^24.2.0",
     "@types/pg": "^8.11.11",
+    "@typescript-eslint/eslint-plugin": "^8.24.0",
+    "@typescript-eslint/parser": "^8.24.0",
     "eslint": "^9.20.1",
     "globals": "^15.15.0",
     "typescript": "^5.8.2"
