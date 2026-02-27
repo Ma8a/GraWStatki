@@ -226,7 +226,7 @@ Przykład `503`:
 
 Konfiguracja:
 - `CORS_ORIGINS` — lista dozwolonych originów rozdzielona przecinkami (np. `http://localhost:3000,http://127.0.0.1:3000`); w produkcji używaj tylko jawnej allowlisty.
-- `REQUIRE_ORIGIN_HEADER` — jeśli ustawione na `1`/`true`/`yes`, handshake socketów bez nagłówka `Origin` jest odrzucany.
+- `REQUIRE_ORIGIN_HEADER` — jeśli ustawione na `1`/`true`/`yes`, handshake socketów bez nagłówka `Origin` jest domyślnie odrzucany; wyjątek: brak `Origin` może przejść tylko wtedy, gdy nagłówek `Host` pasuje do hosta z allowlisty `CORS_ORIGINS`.
 - `TRUST_PROXY` — ustaw `true`/`1` przy zaufanym reverse proxy, aby poprawnie czytać `x-forwarded-for`.
 - `RATE_LIMIT_SHOT_PER_WINDOW`, `RATE_LIMIT_SHOT_WINDOW_MS` — limity burst dla `game:shot`.
 - `RATE_LIMIT_PLACE_SHIPS_PER_WINDOW`, `RATE_LIMIT_PLACE_SHIPS_WINDOW_MS` — limity burst dla `game:place_ships`.
@@ -427,6 +427,104 @@ Status gotowości w online:
 4. Po krótkim meczu kliknij `Nowa gra online` → potwierdź wejście do `queue:queued` i powrót do ustawiania nowej gry.
 5. Rozłącz jedną stronę na 5–10 s i sprawdź komunikat reconnecta.
 6. Przełącz język na `EN` i sprawdź, że etykiety UI i główne statusy zmieniają się bez odświeżenia strony.
+
+## Aktualizacja środowiska: OVH + multi-domain + Socket.IO (2026-02-27)
+
+### Co było problemem
+
+- Frontend ładował się poprawnie, ale handshake Socket.IO (`/socket.io/?EIO=4&transport=polling`) dostawał `403`.
+- Efekt: brak stabilnego połączenia realtime i niedziałające kolejki online (`queue:queued` / `queue:matched`).
+- Główna przyczyna: restrykcja `REQUIRE_ORIGIN_HEADER=true` przy ruchu, gdzie `Origin` mógł nie dotrzeć, oraz brak pełnej konfiguracji dla drugiej domeny.
+
+### Co zmieniono
+
+- Backend handshake:
+  - `allowRequest` sprawdza teraz także `Host` dla żądań bez `Origin`.
+  - Przy `REQUIRE_ORIGIN_HEADER=true` żądanie bez `Origin` przechodzi tylko, gdy `Host` należy do hostów wynikających z `CORS_ORIGINS`.
+  - Log odrzucenia zawiera `origin` + `host` + `remote`, co przyspiesza diagnozę.
+- Konfiguracja domen:
+  - `CORS_ORIGINS` obsługuje jednocześnie:
+    - `https://grawstatki.devos.uk`
+    - `https://battleship.devos.uk`
+- Frontend i18n:
+  - Domyślny język zależy od domeny:
+    - `grawstatki.devos.uk` -> `pl`
+    - `battleship.devos.uk` -> `en`
+  - Lokalny wybór użytkownika zapisany w `localStorage` nadal ma priorytet.
+
+### OVH DNS (co dodać)
+
+W strefie `devos.uk`:
+
+1. `A`:
+   - `Subdomain`: `battleship`
+   - `Target`: ten sam IPv4 co `grawstatki.devos.uk` (aktualnie `54.38.54.68`).
+2. `AAAA` (opcjonalnie, tylko jeśli używasz IPv6):
+   - `Subdomain`: `battleship`
+   - `Target`: ten sam IPv6 co dla `grawstatki.devos.uk`.
+3. Upewnij się, że nie ma konfliktu `CNAME battleship` z rekordem `A/AAAA`.
+4. Jeśli używasz rekordów `CAA`, dopuść Let’s Encrypt:
+   - `CAA 0 issue "letsencrypt.org"`.
+
+### Wdrożenie na VPS (Nginx + certyfikat)
+
+1. Zaktualizuj env aplikacji (`.env.production`):
+
+```env
+CORS_ORIGINS=https://grawstatki.devos.uk,https://battleship.devos.uk
+REQUIRE_ORIGIN_HEADER=true
+TRUST_PROXY=true
+```
+
+2. Upewnij się, że vhost Nginx ma oba hosty i websocket upgrade:
+
+```nginx
+server_name grawstatki.devos.uk battleship.devos.uk;
+
+location / {
+    proxy_pass http://127.0.0.1:3100;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 120s;
+}
+```
+
+3. Zweryfikuj i przeładuj Nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+4. Rozszerz certyfikat o drugą domenę (po propagacji DNS):
+
+```bash
+sudo certbot --nginx --expand -d grawstatki.devos.uk -d battleship.devos.uk
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Checklista weryfikacji po wdrożeniu
+
+1. `GET /health` i `GET /ready` zwracają poprawne statusy.
+2. Logi Nginx nie pokazują już seryjnych `403` dla `/socket.io/?EIO=4&transport=polling`.
+3. Dwie sesje przeglądarki wchodzą do kolejki i dostają `queue:matched`.
+4. `grawstatki.devos.uk` startuje domyślnie po polsku (na czystym `localStorage`).
+5. `battleship.devos.uk` startuje domyślnie po angielsku (na czystym `localStorage`).
+
+### Szybki rollback (awaryjny)
+
+Jeśli handshake nadal jest blokowany i potrzebny jest natychmiastowy hotfix:
+
+1. Tymczasowo ustaw `REQUIRE_ORIGIN_HEADER=false`.
+2. Zrestartuj aplikację.
+3. Zbieraj logi `socket_origin_rejected` i popraw allowlistę/hosty.
+4. Po diagnozie wróć do `REQUIRE_ORIGIN_HEADER=true`.
 
 ## Release gate (checklista przed wdrożeniem)
 

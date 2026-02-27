@@ -1,0 +1,22 @@
+services:
+  app:
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      CORS_ORIGINS: https://grawstatki.devos.uk,https://battleship.devos.uk
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://battleship:battleship@postgres:5432/battleship
+    command: sh -c "npm ci --include=dev && npm run build && npm start"
+    ports:
+      - "127.0.0.1:3100:3000"
+
+  redis:
+    restart: unless-stopped
+    ports: []
+
+  postgres:
+    restart: unless-stopped
+    ports: []

@@ -507,13 +507,21 @@ const t = (key: string, vars?: Record<string, string | number>): string => {
   return formatI18n(template, vars);
 };
 
+const defaultLanguageForHostname = (): Lang => {
+  const hostname = window.location.hostname.trim().toLowerCase();
+  if (hostname === "battleship.devos.uk") return "en";
+  if (hostname === "grawstatki.devos.uk") return "pl";
+  return "pl";
+};
+
 const getStoredLanguage = (): Lang => {
   try {
     const value = localStorage.getItem(LANGUAGE_KEY);
-    return value === "en" ? "en" : "pl";
+    if (value === "en" || value === "pl") return value;
   } catch {
-    return "pl";
+    return defaultLanguageForHostname();
   }
+  return defaultLanguageForHostname();
 };
 
 const storeLanguage = (value: Lang) => {

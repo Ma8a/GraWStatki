@@ -115,6 +115,38 @@ const normalizeOriginValue = (value: string): string => {
   }
 };
 
+const parseHttpUrl = (value: string): URL | null => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed;
+    }
+  } catch {
+    // Ignore parse errors.
+  }
+  return null;
+};
+
+const normalizeHostValue = (value: string | undefined): string => {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  if (!trimmed) return "";
+
+  const direct = parseHttpUrl(trimmed);
+  if (direct?.hostname) return direct.hostname.toLowerCase();
+
+  const withScheme = parseHttpUrl(`http://${trimmed}`);
+  if (withScheme?.hostname) return withScheme.hostname.toLowerCase();
+
+  const withoutPath = (trimmed.split("/")[0] ?? "").trim();
+  if (!withoutPath) return "";
+  if (withoutPath.startsWith("[")) {
+    const ipv6End = withoutPath.indexOf("]");
+    if (ipv6End > 0) return withoutPath.slice(0, ipv6End + 1);
+    return withoutPath;
+  }
+  return ((withoutPath.split(":")[0] ?? "").trim()).toLowerCase();
+};
+
 const parseCorsOrigins = (): string[] => {
   if (!process.env.CORS_ORIGINS) {
     if (process.env.NODE_ENV === "test") {
@@ -137,18 +169,31 @@ const resolveCorsConfig = () => {
   const parsedOrigins = parseCorsOrigins();
   const allowAll = parsedOrigins.includes("*");
   const allowedOrigins = new Set(parsedOrigins.filter((origin) => origin !== "*"));
+  const allowedHosts = new Set(
+    [...allowedOrigins]
+      .map((origin) => normalizeHostValue(origin))
+      .filter(Boolean),
+  );
 
-  const isAllowedOrigin = (originHeader: string | undefined): boolean => {
+  const isAllowedOrigin = (originHeader: string | undefined, hostHeader: string | undefined): boolean => {
     if (allowAll) return true;
-    if (!originHeader) return !REQUIRE_ORIGIN_HEADER;
-    const normalized = normalizeOriginValue(originHeader);
-    if (!normalized || normalized === "*") return false;
-    return allowedOrigins.has(normalized);
+
+    if (originHeader) {
+      const normalizedOrigin = normalizeOriginValue(originHeader);
+      if (!normalizedOrigin || normalizedOrigin === "*") return false;
+      return allowedOrigins.has(normalizedOrigin);
+    }
+
+    if (!REQUIRE_ORIGIN_HEADER) return true;
+    const normalizedHost = normalizeHostValue(hostHeader);
+    if (!normalizedHost) return false;
+    return allowedHosts.has(normalizedHost);
   };
 
   return {
     allowAll,
     allowedOrigins: [...allowedOrigins],
+    allowedHosts: [...allowedHosts],
     isAllowedOrigin,
   };
 };
@@ -641,16 +686,20 @@ const io = new Server(httpServer, {
   allowRequest: (req, callback) => {
     const originHeader = req.headers.origin;
     const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
-    if (corsConfig.isAllowedOrigin(origin)) {
+    const hostHeader = req.headers.host;
+    const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+    if (corsConfig.isAllowedOrigin(origin, host)) {
       callback(null, true);
       return;
     }
     if (process.env.NODE_ENV !== "test") {
       const safeOrigin = typeof origin === "string" ? origin.slice(0, 128) : "unknown";
+      const safeHost = typeof host === "string" ? host.slice(0, 128) : "unknown";
       const remote = req.socket.remoteAddress ?? "unknown";
-      console.warn(`[security] rejected socket origin origin=${safeOrigin} remote=${remote}`);
+      console.warn(`[security] rejected socket origin origin=${safeOrigin} host=${safeHost} remote=${remote}`);
       recordSecurityEvent("socket_origin_rejected", {
         origin: safeOrigin,
+        host: safeHost,
         ip: remote,
       });
     }

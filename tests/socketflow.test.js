@@ -124,15 +124,22 @@ const waitForEvent = (socket, event, timeoutMs = 5_000) =>
     socket.once(event, handler);
   });
 
-const requestSocketIoPollingHandshake = (port, origin) =>
+const requestSocketIoPollingHandshake = (port, options = {}) =>
   new Promise((resolve, reject) => {
+    const headers = {};
+    if (typeof options.origin === "string" && options.origin.length > 0) {
+      headers.Origin = options.origin;
+    }
+    if (typeof options.host === "string" && options.host.length > 0) {
+      headers.Host = options.host;
+    }
     const request = http.request(
       {
         hostname: "127.0.0.1",
         port,
         method: "GET",
         path: `/socket.io/?EIO=4&transport=polling&t=${Date.now().toString(36)}`,
-        headers: origin ? { Origin: origin } : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
       },
       (response) => {
         let body = "";
@@ -351,14 +358,64 @@ test("socket handshake accepts allowed origin and rejects disallowed origin", as
   });
 
   try {
-    const allowed = await requestSocketIoPollingHandshake(port, "http://allowed.example");
-    const blocked = await requestSocketIoPollingHandshake(port, "http://blocked.example");
+    const allowed = await requestSocketIoPollingHandshake(port, {
+      origin: "http://allowed.example",
+    });
+    const blocked = await requestSocketIoPollingHandshake(port, {
+      origin: "http://blocked.example",
+    });
     const missing = await requestSocketIoPollingHandshake(port);
 
     assert.equal(allowed.statusCode, 200);
     assert.equal(allowed.body.includes("sid"), true);
     assert.equal(blocked.statusCode === 400 || blocked.statusCode === 403, true);
     assert.equal(missing.statusCode === 400 || missing.statusCode === 403, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("socket handshake without origin is allowed when host is in CORS_ORIGINS", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    CORS_ORIGINS: "https://grawstatki.devos.uk,https://battleship.devos.uk",
+    REQUIRE_ORIGIN_HEADER: "1",
+  });
+
+  try {
+    const allowedPrimaryHost = await requestSocketIoPollingHandshake(port, {
+      host: "grawstatki.devos.uk",
+    });
+    const allowedSecondaryHost = await requestSocketIoPollingHandshake(port, {
+      host: "battleship.devos.uk:443",
+    });
+    const blockedHost = await requestSocketIoPollingHandshake(port, {
+      host: "blocked.example",
+    });
+
+    assert.equal(allowedPrimaryHost.statusCode, 200);
+    assert.equal(allowedPrimaryHost.body.includes("sid"), true);
+    assert.equal(allowedSecondaryHost.statusCode, 200);
+    assert.equal(allowedSecondaryHost.body.includes("sid"), true);
+    assert.equal(blockedHost.statusCode === 400 || blockedHost.statusCode === 403, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("socket handshake accepts second configured production origin", async () => {
+  const port = randomPort();
+  const server = await startTestServer(port, {
+    CORS_ORIGINS: "https://grawstatki.devos.uk,https://battleship.devos.uk",
+    REQUIRE_ORIGIN_HEADER: "1",
+  });
+
+  try {
+    const secondary = await requestSocketIoPollingHandshake(port, {
+      origin: "https://battleship.devos.uk",
+    });
+    assert.equal(secondary.statusCode, 200);
+    assert.equal(secondary.body.includes("sid"), true);
   } finally {
     await server.close();
   }

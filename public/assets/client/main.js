@@ -429,14 +429,24 @@ const t = (key, vars) => {
     const template = I18N[language][key] ?? I18N.pl[key] ?? key;
     return formatI18n(template, vars);
 };
+const defaultLanguageForHostname = () => {
+    const hostname = window.location.hostname.trim().toLowerCase();
+    if (hostname === "battleship.devos.uk")
+        return "en";
+    if (hostname === "grawstatki.devos.uk")
+        return "pl";
+    return "pl";
+};
 const getStoredLanguage = () => {
     try {
         const value = localStorage.getItem(LANGUAGE_KEY);
-        return value === "en" ? "en" : "pl";
+        if (value === "en" || value === "pl")
+            return value;
     }
     catch {
-        return "pl";
+        return defaultLanguageForHostname();
     }
+    return defaultLanguageForHostname();
 };
 const storeLanguage = (value) => {
     try {
